@@ -97,6 +97,11 @@ func (l *Logger) Errorf(format string, a ...interface{}) {
 	}
 }
 
+// PublicWarnf logs a warning message that is always displayed, regardless of verbose mode.
+func (l *Logger) PublicWarnf(format string, a ...interface{}) {
+	l.log("WARN", "yellow", format, a...)
+}
+
 // Fatalf logs an error message and exits.
 func (l *Logger) Fatalf(format string, a ...interface{}) {
 	l.log("FATAL", "red", format, a...)

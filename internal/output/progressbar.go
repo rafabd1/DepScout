@@ -2,7 +2,9 @@ package output
 
 import (
 	"fmt"
+	"math"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/morikuni/aec"
@@ -10,13 +12,14 @@ import (
 
 // ProgressBar displays a progress bar in the terminal.
 type ProgressBar struct {
-	controller *TerminalController
-	total      int
-	current    int
-	mu         *sync.Mutex
-	ticker     *time.Ticker
-	done       chan bool
-	wg         sync.WaitGroup
+	controller        *TerminalController
+	total             int
+	current           int
+	mu                *sync.Mutex
+	ticker            *time.Ticker
+	done              chan bool
+	wg                sync.WaitGroup
+	requestsPerSecond uint64 // Stored as bits of a float64
 }
 
 // NewProgressBar creates a new ProgressBar.
@@ -30,6 +33,11 @@ func NewProgressBar(controller *TerminalController) *ProgressBar {
 // SetMutex sets the mutex to be used for synchronization.
 func (p *ProgressBar) SetMutex(mu *sync.Mutex) {
 	p.mu = mu
+}
+
+// SetRPS sets the current requests per second value.
+func (p *ProgressBar) SetRPS(rps float64) {
+	atomic.StoreUint64(&p.requestsPerSecond, math.Float64bits(rps))
 }
 
 // Start begins rendering the progress bar.
@@ -114,6 +122,8 @@ func (p *ProgressBar) render() {
 		bar += " "
 	}
 
-	progressText := fmt.Sprintf("Progress: [%s] %d/%d (%.2f%%)", bar, p.current, p.total, percent)
+	rpsBits := atomic.LoadUint64(&p.requestsPerSecond)
+	rps := math.Float64frombits(rpsBits)
+	progressText := fmt.Sprintf("Progress: [%s] %d/%d (%.2f%%) | %.1f req/s", bar, p.current, p.total, percent, rps)
 	p.controller.Overwritef("%s", progressText)
 } 
