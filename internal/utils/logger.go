@@ -2,6 +2,7 @@ package utils
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"DepScout/internal/output"
@@ -11,8 +12,11 @@ import (
 
 // Logger provides structured logging capabilities.
 type Logger struct {
-	controller *output.TerminalController
-	verbose    bool
+	controller  *output.TerminalController
+	progBar     *output.ProgressBar
+	verbose     bool
+	isProgBarOn bool
+	mu          sync.Mutex
 }
 
 // NewLogger creates a new Logger.
@@ -23,7 +27,25 @@ func NewLogger(controller *output.TerminalController, verbose bool) *Logger {
 	}
 }
 
+// SetProgressBar injects the progress bar dependency.
+func (l *Logger) SetProgressBar(p *output.ProgressBar) {
+	l.progBar = p
+	l.progBar.SetMutex(&l.mu)
+}
+
+// SetProgBarActive notifies the logger that the progress bar is running.
+func (l *Logger) SetProgBarActive(isActive bool) {
+	l.isProgBarOn = isActive
+}
+
 func (l *Logger) log(level, color, format string, a ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.progBar != nil && l.isProgBarOn {
+		l.progBar.Clear()
+	}
+
 	prefix := aec.LightBlackF.Apply(fmt.Sprintf("[%s] ", time.Now().Format("15:04:05")))
 	levelStr := fmt.Sprintf("[%s] ", level)
 	
@@ -43,6 +65,10 @@ func (l *Logger) log(level, color, format string, a ...interface{}) {
 
 	message := fmt.Sprintf(format, a...)
 	l.controller.Println(prefix + coloredLevel + message)
+
+	if l.progBar != nil && l.isProgBarOn {
+		l.progBar.UnsafeRender()
+	}
 }
 
 // Infof logs an informational message.

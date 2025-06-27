@@ -53,7 +53,13 @@ func (p *Processor) ProcessJSFileContent(sourceURL string, body []byte) error {
 			if p.isPackageWorthChecking(packageName) {
 				// Apenas enfileira o job se o pacote não tiver sido verificado ainda.
 				if _, loaded := p.checkedPackages.LoadOrStore(packageName, true); !loaded {
-					p.scheduler.addJob(NewJob(packageName, VerifyPackage))
+					// Corrigido: Cria o job manualmente para preservar a SourceURL original.
+					verifyJob := Job{
+						Input:     packageName,
+						SourceURL: sourceURL,
+						Type:      VerifyPackage,
+					}
+					p.scheduler.addJob(verifyJob)
 				}
 			}
 		}

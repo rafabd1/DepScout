@@ -66,6 +66,7 @@ func main() {
 	scheduler := core.NewScheduler(cfg, client, processor, domainManager, logger, reporter, progBar)
 
 	processor.SetScheduler(scheduler)
+	logger.SetProgressBar(progBar)
 
 	// Start the scan
 	startTime := time.Now()
@@ -73,12 +74,14 @@ func main() {
 
 	scheduler.AddInitialTargets(cfg.Targets)
 	progBar.Start(len(cfg.Targets))
-	
+	logger.SetProgBarActive(true)
+
 	scheduler.StartScan()
 	scheduler.Wait()
 
 	progBar.Stop()
-	
+	logger.SetProgBarActive(false)
+
 	// Print results
 	reporter.Print()
 
