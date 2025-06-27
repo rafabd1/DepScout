@@ -159,23 +159,21 @@ func (s *Scheduler) worker() {
 			break
 		}
 		
-		// Use a timeout for each job's context
-		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(s.config.Timeout)*time.Second)
+		// Don't create timeout context here - each operation will create its own as needed
 		switch job.Type {
 		case FetchJS:
-			s.processFetchJob(ctx, job)
+			s.processFetchJob(job)
 		case ProcessJS:
 			s.processor.ProcessJSFileContent(job.SourceURL, job.Body)
 			s.handleJobSuccess(job.Input, "ProcessJS")
 		case VerifyPackage:
-			s.processVerifyPackageJob(ctx, job)
+			s.processVerifyPackageJob(job)
 		}
-		cancel()
 		s.jobsWg.Done()
 	}
 }
 
-func (s *Scheduler) processFetchJob(ctx context.Context, job Job) {
+func (s *Scheduler) processFetchJob(job Job) {
 	isLocalFile := !strings.HasPrefix(job.Input, "http://") && !strings.HasPrefix(job.Input, "https://")
 	var body []byte
 	var err error
@@ -210,14 +208,18 @@ func (s *Scheduler) processFetchJob(ctx context.Context, job Job) {
 	}
 		job.BaseDomain = u.Hostname()
 
-		// Wait for rate limiting permit without separate timeout
-		// Only the HTTP request itself should have a timeout
+		// Wait for rate limiting permit without timeout - prevents unnecessary job failures
 		if err := s.domainManager.WaitForPermit(context.Background(), job.BaseDomain); err != nil {
 			s.handleJobFailure(job, err)
 		return
 	}
 
 		s.requestCount.Add(1)
+		
+		// Create timeout context specifically for HTTP request
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(s.config.Timeout)*time.Second)
+		defer cancel()
+		
 		reqData := networking.RequestData{URL: job.Input, Method: "GET", Ctx: ctx}
 		respData := s.client.Do(reqData)
 		justDiscarded := s.domainManager.RecordRequestResult(job.BaseDomain, respData.StatusCode, respData.Error)
@@ -272,9 +274,14 @@ func (s *Scheduler) processFetchJob(ctx context.Context, job Job) {
 	s.handleJobSuccess(job.Input, "FetchJS")
 }
 
-func (s *Scheduler) processVerifyPackageJob(ctx context.Context, job Job) {
+func (s *Scheduler) processVerifyPackageJob(job Job) {
 	packageName := job.Input
 	checkURL := "https://registry.npmjs.org/" + url.PathEscape(packageName)
+	
+	// Create timeout context specifically for HTTP request
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(s.config.Timeout)*time.Second)
+	defer cancel()
+	
 	reqData := networking.RequestData{URL: checkURL, Method: "HEAD", Ctx: ctx}
 	s.logger.Debugf("Verifying package '%s' at %s", packageName, checkURL)
 	s.requestCount.Add(1)
