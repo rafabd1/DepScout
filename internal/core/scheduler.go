@@ -80,7 +80,7 @@ func NewScheduler(
 		logger:         logger,
 		reporter:       reporter,
 		progBar:        progBar,
-		jobDistributor: NewJobDistributor(cfg.Concurrency),
+		jobDistributor: NewJobDistributor(cfg.Concurrency, domainManager),
 		stopRpsCounter: make(chan bool),
 	}
 }

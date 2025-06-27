@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"DepScout/internal/networking"
 )
 
 // JobDistributor manages intelligent distribution of jobs across domains
@@ -21,10 +23,11 @@ type JobDistributor struct {
 	closed             bool
 	distributorCtx     context.Context
 	distributorCancel  context.CancelFunc
+	domainManager      *networking.DomainManager // Reference to check domain status
 }
 
 // NewJobDistributor creates a new intelligent job distributor
-func NewJobDistributor(maxConcurrency int) *JobDistributor {
+func NewJobDistributor(maxConcurrency int, domainManager *networking.DomainManager) *JobDistributor {
 	ctx, cancel := context.WithCancel(context.Background())
 	
 	// Calculate appropriate queue sizes based on expected workload
@@ -40,6 +43,7 @@ func NewJobDistributor(maxConcurrency int) *JobDistributor {
 		maxQueueSize:     domainQueueSize,
 		distributorCtx:   ctx,
 		distributorCancel: cancel,
+		domainManager:    domainManager,
 	}
 }
 
@@ -122,6 +126,9 @@ func (jd *JobDistributor) GetNextJob(workerID int) (Job, bool) {
 			}
 		}
 
+		// Periodically refresh available domains to reactivate domains that came out of backoff
+		jd.refreshAvailableDomains()
+
 		// Strategy 1: Try to get a job from a domain that's not currently being processed
 		// by other workers (intelligent distribution)
 		selectedDomain := jd.selectOptimalDomain(workerID)
@@ -199,7 +206,7 @@ func (jd *JobDistributor) GetNextJob(workerID int) (Job, bool) {
 	}
 }
 
-// selectOptimalDomain chooses the best domain for a worker
+// selectOptimalDomain chooses the best domain for a worker, excluding blocked domains
 func (jd *JobDistributor) selectOptimalDomain(workerID int) string {
 	if len(jd.availableDomains) == 0 {
 		return ""
@@ -214,6 +221,11 @@ func (jd *JobDistributor) selectOptimalDomain(workerID int) string {
 		index := (startIndex + i) % len(jd.availableDomains)
 		domain := jd.availableDomains[index]
 		
+		// Skip domains that are blocked, discarded, or in backoff
+		if jd.isDomainBlocked(domain) {
+			continue
+		}
+		
 		// Check if this domain has jobs
 		if jd.domainJobCounts[domain] > 0 {
 			return domain
@@ -221,6 +233,25 @@ func (jd *JobDistributor) selectOptimalDomain(workerID int) string {
 	}
 	
 	return ""
+}
+
+// isDomainBlocked checks if a domain should be avoided for job distribution
+func (jd *JobDistributor) isDomainBlocked(domain string) bool {
+	if jd.domainManager == nil {
+		return false
+	}
+	
+	// Check if domain is discarded permanently
+	if jd.domainManager.IsDiscarded(domain) {
+		return true
+	}
+	
+	// Check if domain is in backoff
+	if jd.domainManager.IsDomainInBackoff(domain) {
+		return true
+	}
+	
+	return false
 }
 
 // extractDomain extracts domain from job for FetchJS jobs
@@ -241,13 +272,70 @@ func (jd *JobDistributor) extractDomain(job Job) string {
 	return u.Hostname()
 }
 
-// updateAvailableDomains updates the list of domains with available jobs
+// updateAvailableDomains updates the list of domains with available jobs, excluding blocked domains
 func (jd *JobDistributor) updateAvailableDomains() {
 	jd.availableDomains = jd.availableDomains[:0] // Clear slice efficiently
 	
 	for domain, count := range jd.domainJobCounts {
-		if count > 0 {
+		if count > 0 && !jd.isDomainBlocked(domain) {
 			jd.availableDomains = append(jd.availableDomains, domain)
+		}
+	}
+}
+
+// refreshAvailableDomains updates available domains, potentially reactivating domains that came out of backoff
+func (jd *JobDistributor) refreshAvailableDomains() {
+	// Only refresh if we have few available domains but there are domain queues with jobs
+	if len(jd.availableDomains) < len(jd.domainJobCounts)/3 {
+		// First, try to redistribute jobs from blocked domains
+		jd.redistributeBlockedJobsInternal()
+		// Then update available domains list
+		jd.updateAvailableDomains()
+	}
+}
+
+// redistributeBlockedJobsInternal is called while already holding the lock
+func (jd *JobDistributor) redistributeBlockedJobsInternal() {
+	if jd.domainManager == nil {
+		return
+	}
+	
+	var redistributedCount int
+	
+	for domain, queue := range jd.domainQueues {
+		if jd.isDomainBlocked(domain) && jd.domainJobCounts[domain] > 0 {
+			// Try to move a few jobs from blocked domain queue to global queue
+			moved := 0
+			maxToMove := 5 // Don't move too many at once to avoid blocking
+			
+			for moved < maxToMove && moved < jd.domainJobCounts[domain] {
+				select {
+				case job := <-queue:
+					select {
+					case jd.globalQueue <- job:
+						moved++
+						redistributedCount++
+					default:
+						// Global queue is full, put job back and stop
+						select {
+						case queue <- job:
+						default:
+							// Both queues full, job will be lost but that's better than blocking
+						}
+						goto nextDomain
+					}
+				default:
+					// No more jobs in this domain queue
+					break
+				}
+			}
+			
+			nextDomain:
+			// Update job count for this domain
+			jd.domainJobCounts[domain] -= moved
+			if jd.domainJobCounts[domain] < 0 {
+				jd.domainJobCounts[domain] = 0
+			}
 		}
 	}
 }
@@ -269,6 +357,58 @@ func (jd *JobDistributor) Close() {
 	}
 }
 
+// RedistributeBlockedJobs moves jobs from blocked domains to the global queue
+func (jd *JobDistributor) RedistributeBlockedJobs() {
+	jd.mu.Lock()
+	defer jd.mu.Unlock()
+	
+	if jd.domainManager == nil {
+		return
+	}
+	
+	var redistributedCount int
+	
+	for domain, queue := range jd.domainQueues {
+		if jd.isDomainBlocked(domain) && jd.domainJobCounts[domain] > 0 {
+			// Move jobs from blocked domain queue to global queue
+			moved := 0
+			for moved < jd.domainJobCounts[domain] {
+				select {
+				case job := <-queue:
+					select {
+					case jd.globalQueue <- job:
+						moved++
+						redistributedCount++
+					default:
+						// Global queue is full, put job back and stop
+						// This is a non-blocking operation, so we don't get stuck
+						select {
+						case queue <- job:
+						default:
+							// Both queues full, job will be lost but that's better than blocking
+						}
+						goto nextDomain
+					}
+				default:
+					// No more jobs in this domain queue
+					break
+				}
+			}
+			
+			nextDomain:
+			// Update job count for this domain
+			jd.domainJobCounts[domain] -= moved
+			if jd.domainJobCounts[domain] < 0 {
+				jd.domainJobCounts[domain] = 0
+			}
+		}
+	}
+	
+	if redistributedCount > 0 {
+		jd.updateAvailableDomains()
+	}
+}
+
 // GetStats returns statistics about the distributor
 func (jd *JobDistributor) GetStats() map[string]interface{} {
 	jd.mu.RLock()
@@ -278,6 +418,14 @@ func (jd *JobDistributor) GetStats() map[string]interface{} {
 	stats["total_domains"] = len(jd.domainQueues)
 	stats["available_domains"] = len(jd.availableDomains)
 	stats["domain_job_counts"] = make(map[string]int)
+	
+	// Add info about blocked domains
+	var blockedDomains []string
+	if jd.domainManager != nil {
+		blockedDomains = jd.domainManager.GetBlockedDomains()
+	}
+	stats["blocked_domains"] = len(blockedDomains)
+	stats["blocked_domain_list"] = blockedDomains
 	
 	for domain, count := range jd.domainJobCounts {
 		if count > 0 {
