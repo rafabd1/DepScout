@@ -40,6 +40,7 @@ type Job struct {
 	SourceURL  string
 	Body       []byte
 	BaseDomain string
+	Retries    int
 }
 
 // Scheduler orchestrates the scanning process.
@@ -54,6 +55,7 @@ type Scheduler struct {
 	jobQueue      chan Job
 	jobsWg        sync.WaitGroup
 	workersWg     sync.WaitGroup
+	initialAddWg  sync.WaitGroup
 }
 
 // NewScheduler creates a new Scheduler instance.
@@ -78,14 +80,32 @@ func NewScheduler(
 	}
 }
 
+// addJob é o método central e seguro para adicionar um novo trabalho ao pipeline.
+// Ele garante que o WaitGroup seja incrementado corretamente.
+func (s *Scheduler) addJob(job Job) {
+	s.jobsWg.Add(1)
+	s.jobQueue <- job
+}
+
+// requeueJob adiciona um trabalho de volta à fila sem incrementar o WaitGroup.
+// Usado para retries onde o trabalho original já foi contabilizado.
+func (s *Scheduler) requeueJob(job Job) {
+	s.jobQueue <- job
+}
+
 // AddInitialTargets adiciona uma lista de alvos iniciais ao scheduler.
-// Isso deve ser chamado antes de StartScan.
+// Esta função é síncrona e irá bloquear se o canal de jobs estiver cheio,
+// o que é o comportamento esperado, pois os workers já estarão processando.
 func (s *Scheduler) AddInitialTargets(targets []string) {
-	for _, target := range targets {
-		if target != "" {
-			s.addJob(NewJob(target, FetchJS))
+	s.initialAddWg.Add(1)
+	go func() {
+		defer s.initialAddWg.Done()
+		for _, target := range targets {
+			if target != "" {
+				s.addJob(NewJob(target, FetchJS))
+			}
 		}
-	}
+	}()
 }
 
 // StartScan begins the scanning process.
@@ -97,7 +117,8 @@ func (s *Scheduler) StartScan() {
 }
 
 func (s *Scheduler) Wait() {
-	s.jobsWg.Wait()
+	s.initialAddWg.Wait() // Espera a adição inicial de jobs terminar.
+	s.jobsWg.Wait()       // Espera todos os jobs (iniciais e subsequentes) serem processados.
 	close(s.jobQueue)
 	s.workersWg.Wait()
 }
@@ -117,21 +138,32 @@ func (s *Scheduler) worker() {
 			s.processVerifyPackageJob(ctx, job)
 		}
 		cancel()
+		s.jobsWg.Done()
 	}
-}
-
-func (s *Scheduler) addJob(job Job) {
-	s.jobsWg.Add(1)
-	s.jobQueue <- job
 }
 
 func (s *Scheduler) processFetchJob(ctx context.Context, job Job) {
 	isLocalFile := !strings.HasPrefix(job.Input, "http://") && !strings.HasPrefix(job.Input, "https://")
 	var body []byte
 	var err error
+	maxBytes := int64(s.config.MaxFileSize * 1024)
 
 	if isLocalFile {
 		s.logger.Debugf("Reading local file: %s", job.Input)
+
+		if !s.config.NoLimit {
+			fileInfo, statErr := os.Stat(job.Input)
+			if statErr != nil {
+				s.handleJobFailure(job, fmt.Errorf("failed to stat local file: %w", statErr))
+				return
+			}
+			if fileInfo.Size() > maxBytes {
+				s.logger.Warnf("Skipping local file %s, size (%d KB) exceeds limit (%d KB)", job.Input, fileInfo.Size()/1024, s.config.MaxFileSize)
+				s.handleJobFailure(job, fmt.Errorf("file size exceeds limit"))
+				return
+			}
+		}
+
 		body, err = os.ReadFile(job.Input)
 		if err != nil {
 			s.handleJobFailure(job, fmt.Errorf("failed to read local file: %w", err))
@@ -148,6 +180,20 @@ func (s *Scheduler) processFetchJob(ctx context.Context, job Job) {
 		reqData := networking.RequestData{URL: job.Input, Method: "GET", Ctx: ctx}
 		respData := s.client.Do(reqData)
 		s.domainManager.RecordRequestResult(job.BaseDomain, respData.StatusCode, respData.Error)
+
+		// Se recebermos um 429, reenfileiramos o job para uma nova tentativa, se o limite não foi atingido.
+		if respData.StatusCode == 429 {
+			if job.Retries < 3 { // Limite de 3 retries por job
+				job.Retries++
+				s.logger.Warnf("Re-queueing job for %s due to 429. Attempt %d.", job.Input, job.Retries)
+				s.requeueJob(job) // Usa requeueJob para não incrementar o WaitGroup novamente
+			} else {
+				s.logger.Errorf("Job for %s failed after %d retries due to 429.", job.Input, job.Retries)
+				s.handleJobFailure(job, fmt.Errorf("HTTP status 429 after max retries"))
+			}
+			return
+		}
+
 		if respData.Error != nil || respData.StatusCode >= 400 {
 			err = respData.Error
 			if err == nil {
@@ -157,16 +203,31 @@ func (s *Scheduler) processFetchJob(ctx context.Context, job Job) {
 			return
 		}
 		defer respData.Response.Body.Close()
-		body, err = io.ReadAll(respData.Response.Body)
+
+		var limitedReader io.Reader = respData.Response.Body
+		if !s.config.NoLimit {
+			limitedReader = io.LimitReader(respData.Response.Body, maxBytes)
+		}
+		body, err = io.ReadAll(limitedReader)
+
 		if err != nil {
 			s.handleJobFailure(job, err)
 			return
 		}
+		if !s.config.NoLimit && int64(len(body)) == maxBytes {
+			s.logger.Warnf("File at %s may have been truncated as it reached the size limit of %d KB", job.Input, s.config.MaxFileSize)
+		}
 	}
 
-	processJob := NewJob(job.SourceURL, ProcessJS)
-	processJob.Body = body
-	s.addJob(processJob)
+	// Dispara uma nova goroutine para adicionar o próximo job.
+	// Isso evita um deadlock onde todos os workers podem ficar bloqueados
+	// tentando adicionar a uma fila cheia da qual eles mesmos deveriam estar consumindo.
+	go func() {
+		processJob := NewJob(job.SourceURL, ProcessJS)
+		processJob.Body = body
+		s.addJob(processJob)
+	}()
+
 	s.handleJobSuccess(job.Input, "FetchJS")
 }
 
@@ -193,21 +254,26 @@ func (s *Scheduler) processVerifyPackageJob(ctx context.Context, job Job) {
 	} else {
 		s.logger.Warnf("Unexpected status code %d for package '%s'", respData.StatusCode, packageName)
 	}
-	s.handleJobSuccess(packageName, "VerifyPackage")
+	// Nota: VerifyPackage jobs não incrementam a barra de progresso
+	s.logger.Debugf("Job succeeded: %s (VerifyPackage)", packageName)
 }
 
+// handleJobSuccess incrementa a barra de progresso apenas para trabalhos FetchJS
 func (s *Scheduler) handleJobSuccess(input, jobType string) {
-	s.progBar.Increment()
+	if jobType == "FetchJS" {
+		s.progBar.Increment()
+	}
 	s.logger.Debugf("Job succeeded: %s (%s)", input, jobType)
-	s.jobsWg.Done()
 }
 
+// handleJobFailure incrementa a barra de progresso apenas para trabalhos FetchJS
 func (s *Scheduler) handleJobFailure(job Job, err error) {
-	s.progBar.Increment()
+	if job.Type == FetchJS {
+		s.progBar.Increment()
+	}
 	s.logger.Errorf("Job failed: %s (%s). Error: %v", job.Input, job.Type.String(), err)
-	s.jobsWg.Done()
 }
 
 func NewJob(input string, jobType JobType) Job {
-	return Job{Input: input, SourceURL: input, Type: jobType}
+	return Job{Input: input, SourceURL: input, Type: jobType, Retries: 0}
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,10 +20,11 @@ import (
 func main() {
 	cfg := config.NewConfig()
 	if err := cfg.Parse(); err != nil {
-		if err != flag.ErrHelp {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			fmt.Fprintln(os.Stderr, "Use -h or --help for usage.")
+		if err == flag.ErrHelp {
+			os.Exit(0)
 		}
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		fmt.Fprintln(os.Stderr, "Use -h or --help for usage.")
 		os.Exit(1)
 	}
 
@@ -68,15 +70,30 @@ func main() {
 	processor.SetScheduler(scheduler)
 	logger.SetProgressBar(progBar)
 
+	// Log initial statistics
+	logger.Infof("Loaded %d targets to scan.", len(cfg.Targets))
+	if len(cfg.Targets) > 0 && strings.HasPrefix(cfg.Targets[0], "http") {
+		uniqueDomains := make(map[string]struct{})
+		for _, target := range cfg.Targets {
+			if u, err := url.Parse(target); err == nil {
+				uniqueDomains[u.Hostname()] = struct{}{}
+			}
+		}
+		logger.Infof("Scanning across %d unique domains.", len(uniqueDomains))
+	}
+
 	// Start the scan
 	startTime := time.Now()
 	logger.Infof("Starting scan with %d workers.", cfg.Concurrency)
+
+	// Os workers devem ser iniciados ANTES de enfileirar os jobs
+	// para evitar deadlocks se a lista de alvos for maior que o buffer do canal.
+	scheduler.StartScan()
 
 	scheduler.AddInitialTargets(cfg.Targets)
 	progBar.Start(len(cfg.Targets))
 	logger.SetProgBarActive(true)
 
-	scheduler.StartScan()
 	scheduler.Wait()
 
 	progBar.Stop()

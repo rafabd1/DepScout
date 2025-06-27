@@ -83,14 +83,18 @@ func (l *Logger) Debugf(format string, a ...interface{}) {
 	}
 }
 
-// Warnf logs a warning message.
+// Warnf logs a warning message only if verbose mode is enabled.
 func (l *Logger) Warnf(format string, a ...interface{}) {
-	l.log("WARN", "yellow", format, a...)
+	if l.verbose {
+		l.log("WARN", "yellow", format, a...)
+	}
 }
 
-// Errorf logs an error message.
+// Errorf logs an error message only if verbose mode is enabled.
 func (l *Logger) Errorf(format string, a ...interface{}) {
-	l.log("ERROR", "red", format, a...)
+	if l.verbose {
+		l.log("ERROR", "red", format, a...)
+	}
 }
 
 // Fatalf logs an error message and exits.

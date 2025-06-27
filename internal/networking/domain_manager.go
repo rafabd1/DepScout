@@ -3,6 +3,7 @@ package networking
 import (
 	"context"
 	"sync"
+	"time"
 
 	"DepScout/internal/config"
 	"DepScout/internal/utils"
@@ -19,8 +20,11 @@ type DomainManager struct {
 }
 
 type DomainBucket struct {
-	limiter *rate.Limiter
-	mode    string
+	limiter      *rate.Limiter
+	mode         string
+	inBackoff    bool
+	nextAttempt  time.Time
+	retryCounter int
 }
 
 func NewDomainManager(cfg *config.Config, logger *utils.Logger) *DomainManager {
@@ -36,10 +40,34 @@ func (dm *DomainManager) WaitForPermit(ctx context.Context, domain string) {
 	dm.mu.Lock()
 	bucket, exists := dm.domains[domain]
 	if !exists {
-		limiter := rate.NewLimiter(1.0, 1) // Default 1 RPS
+		limiter := rate.NewLimiter(rate.Limit(dm.config.RateLimit), 2)
 		bucket = &DomainBucket{limiter: limiter, mode: "AUTO"}
 		dm.domains[domain] = bucket
-		dm.logger.Debugf("[DomainManager] Initialized bucket for domain '%s': Mode: %s, RPS=%.2f", domain, bucket.mode, bucket.limiter.Limit())
+		dm.logger.Debugf("[DomainManager] Initialized bucket for domain '%s': Mode: %s, RPS=%.2f, Burst=%d", domain, bucket.mode, bucket.limiter.Limit(), bucket.limiter.Burst())
+	}
+
+	// Check if domain is in backoff period
+	if bucket.inBackoff {
+		if waitTime := time.Until(bucket.nextAttempt); waitTime > 0 {
+			dm.logger.Warnf("[DomainManager] Domain '%s' is in backoff. Waiting for %s", domain, waitTime.Round(time.Second))
+			dm.mu.Unlock() // Unlock while waiting
+
+			timer := time.NewTimer(waitTime)
+			select {
+			case <-ctx.Done(): // Context was canceled (e.g., job timed out)
+				timer.Stop()
+				dm.logger.Warnf("[DomainManager] Context canceled for '%s' during backoff wait.", domain)
+				// Do not re-lock, just return. The Wait() below will handle the ctx error.
+				return
+			case <-timer.C:
+				// Wait time finished.
+			}
+
+			dm.mu.Lock() // Re-lock to safely modify bucket state
+		}
+		// Backoff period is over, reset it.
+		bucket.inBackoff = false
+		dm.logger.Infof("[DomainManager] Backoff period for '%s' has ended. Resuming requests.", domain)
 	}
 	dm.mu.Unlock()
 
@@ -53,5 +81,48 @@ func (dm *DomainManager) RecordRequestSent(domain string) {
 }
 
 func (dm *DomainManager) RecordRequestResult(domain string, statusCode int, err error) {
-	// Pode ser expandido no futuro para ajustar o rate limit
+	dm.mu.Lock()
+	defer dm.mu.Unlock()
+
+	bucket, exists := dm.domains[domain]
+	if !exists {
+		return // Should not happen if WaitForPermit was called
+	}
+
+	switch {
+	case statusCode == 429:
+		// Reduz a taxa multiplicativamente em caso de 'Too Many Requests'
+		newLimit := bucket.limiter.Limit() * 0.7
+		if newLimit < 0.1 {
+			newLimit = 0.1 // Define um piso mínimo para a taxa
+		}
+		bucket.limiter.SetLimit(newLimit)
+
+		// Ativa o backoff exponencial
+		bucket.retryCounter++
+		backoffDuration := time.Second * time.Duration(2<<bucket.retryCounter)
+		if backoffDuration > time.Minute {
+			backoffDuration = time.Minute
+		}
+		bucket.inBackoff = true
+		bucket.nextAttempt = time.Now().Add(backoffDuration)
+
+		dm.logger.Warnf("[DomainManager] 429 for '%s'. Rate limit reduced to %.2f req/s. Backoff for %s.", domain, newLimit, backoffDuration)
+
+	case statusCode >= 200 && statusCode < 400:
+		// Aumenta a taxa aditivamente em caso de sucesso, apenas se não estiver em backoff.
+		if !bucket.inBackoff {
+			newLimit := bucket.limiter.Limit() + 0.2
+			if newLimit > 25.0 { // Define um teto máximo para a taxa
+				newLimit = 25.0
+			}
+			bucket.limiter.SetLimit(newLimit)
+			dm.logger.Debugf("[DomainManager] Success for '%s'. Rate limit increased to %.2f req/s.", domain, newLimit)
+		}
+	case err != nil:
+		// Reduz a taxa para outros erros de rede também
+		newLimit := bucket.limiter.Limit() * 0.9
+		bucket.limiter.SetLimit(newLimit)
+		dm.logger.Warnf("[DomainManager] Network error for '%s'. Rate limit reduced to %.2f req/s.", domain, newLimit)
+	}
 }
