@@ -20,6 +20,7 @@ type ProgressBar struct {
 	done              chan bool
 	wg                sync.WaitGroup
 	requestsPerSecond uint64 // Stored as bits of a float64
+	startTime         time.Time
 }
 
 // NewProgressBar creates a new ProgressBar.
@@ -27,6 +28,7 @@ func NewProgressBar(controller *TerminalController) *ProgressBar {
     return &ProgressBar{
 		controller: controller,
 		done:       make(chan bool),
+		startTime:  time.Now(), // Initialize start time
 	}
 }
 
@@ -43,6 +45,7 @@ func (p *ProgressBar) SetRPS(rps float64) {
 // Start begins rendering the progress bar.
 func (p *ProgressBar) Start(total int) {
 	p.total = total
+	p.startTime = time.Now() // Reset start time when actually starting
 	p.ticker = time.NewTicker(200 * time.Millisecond)
 	p.wg.Add(1)
 	go p.run()
@@ -105,6 +108,46 @@ func (p *ProgressBar) run() {
 	}
 }
 
+// calculateETA estimates the remaining time based on current progress
+func (p *ProgressBar) calculateETA() string {
+	if p.current == 0 {
+		return "calculating..."
+	}
+	
+	elapsed := time.Since(p.startTime)
+	if elapsed < time.Second {
+		return "calculating..."
+	}
+	
+	// Calculate progress rate (items per second)
+	progressRate := float64(p.current) / elapsed.Seconds()
+	if progressRate <= 0 {
+		return "calculating..."
+	}
+	
+	// Calculate remaining items and estimated time
+	remaining := p.total - p.current
+	if remaining <= 0 {
+		return "done"
+	}
+	
+	etaSeconds := float64(remaining) / progressRate
+	etaDuration := time.Duration(etaSeconds * float64(time.Second))
+	
+	// Format ETA in a human-readable way
+	if etaDuration < time.Minute {
+		return fmt.Sprintf("%ds", int(etaDuration.Seconds()))
+	} else if etaDuration < time.Hour {
+		minutes := int(etaDuration.Minutes())
+		seconds := int(etaDuration.Seconds()) % 60
+		return fmt.Sprintf("%dm%ds", minutes, seconds)
+	} else {
+		hours := int(etaDuration.Hours())
+		minutes := int(etaDuration.Minutes()) % 60
+		return fmt.Sprintf("%dh%dm", hours, minutes)
+	}
+}
+
 // render draws the progress bar. It assumes the caller holds the mutex.
 func (p *ProgressBar) render() {
 	percent := float64(p.current) / float64(p.total) * 100
@@ -124,6 +167,8 @@ func (p *ProgressBar) render() {
 
 	rpsBits := atomic.LoadUint64(&p.requestsPerSecond)
 	rps := math.Float64frombits(rpsBits)
-	progressText := fmt.Sprintf("Progress: [%s] %d/%d (%.2f%%) | %.1f req/s", bar, p.current, p.total, percent, rps)
+	eta := p.calculateETA()
+	
+	progressText := fmt.Sprintf("Progress: [%s] %d/%d (%.2f%%) | %.1f req/s | ETA: %s", bar, p.current, p.total, percent, rps, eta)
 	p.controller.Overwritef("%s", progressText)
 } 
