@@ -48,7 +48,7 @@ func (l *Logger) log(level, color, format string, a ...interface{}) {
 
 	prefix := aec.LightBlackF.Apply(fmt.Sprintf("[%s] ", time.Now().Format("15:04:05")))
 	levelStr := fmt.Sprintf("[%s] ", level)
-	
+
 	var coloredLevel string
 	switch color {
 	case "green":
@@ -100,7 +100,7 @@ func (l *Logger) Errorf(format string, a ...interface{}) {
 // PublicWarnf logs a warning message that is always displayed, regardless of verbose mode.
 func (l *Logger) PublicWarnf(format string, a ...interface{}) {
 	l.log("WARN", "yellow", format, a...)
-}
+	}
 
 // Fatalf logs an error message and exits.
 func (l *Logger) Fatalf(format string, a ...interface{}) {
