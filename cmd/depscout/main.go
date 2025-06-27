@@ -82,6 +82,8 @@ func main() {
 		logger.Infof("Scanning across %d unique domains.", len(uniqueDomains))
 	}
 
+	logInitialSettings(logger, cfg)
+
 	// Start the scan
 	startTime := time.Now()
 	logger.Infof("Starting scan with %d workers.", cfg.Concurrency)
@@ -106,4 +108,26 @@ func main() {
 	if reporter.GetFindingsCount() == 0 {
 		logger.Infof("No unclaimed dependencies found.")
 	}
+}
+
+func logInitialSettings(logger *utils.Logger, cfg *config.Config) {
+	settings := []string{
+		fmt.Sprintf("Rate Limit: Auto (Max %d/s)", cfg.MaxRateLimit),
+	}
+	if cfg.NoLimit {
+		settings = append(settings, "File Size Limit: Disabled")
+	} else {
+		settings = append(settings, fmt.Sprintf("File Size Limit: %d KB", cfg.MaxFileSize))
+	}
+	if cfg.InsecureSkipVerify {
+		settings = append(settings, "TLS Verification: Disabled")
+	}
+	if len(cfg.Headers) > 0 {
+		settings = append(settings, fmt.Sprintf("Custom Headers: %d", len(cfg.Headers)))
+	}
+	if cfg.ProxyFile != "" {
+		settings = append(settings, fmt.Sprintf("Proxy File: %s", cfg.ProxyFile))
+	}
+
+	logger.Infof("Settings: %s", strings.Join(settings, ", "))
 } 

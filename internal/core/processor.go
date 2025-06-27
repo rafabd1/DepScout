@@ -20,9 +20,10 @@ type Processor struct {
 
 // NewProcessor creates a new Processor instance.
 func NewProcessor(cfg *config.Config, logger *utils.Logger) *Processor {
-	// Regex aprimorada para capturar dependências em `require` e `import`.
-	// Cobre: require('pkg'), require("pkg"), require(`pkg`), import from 'pkg', etc.
-	regex := regexp.MustCompile(`(?i)(?:require\s*\(\s*|import\s+.*?\s+from\s+)['"\x60]([^'"\x60]+)['"\x60]`)
+	// Regex aprimorada para validar o contexto da chamada `require` ou `import`.
+	// Garante que "require" é seguido por parênteses e que "from" está em um contexto de importação.
+	// Isso evita a captura de strings em outras funções ou construtos de linguagem.
+	regex := regexp.MustCompile(`(?:require\s*\(\s*|import(?:["'a-zA-Z0-9\s{},*]+)\s*from\s+)['"\x60]((?:@[a-z0-9_.-]+\/)?[a-z0-9_.-]+)['"\x60]`)
 
 	return &Processor{
 		config:       cfg,

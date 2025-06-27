@@ -40,7 +40,9 @@ func (dm *DomainManager) WaitForPermit(ctx context.Context, domain string) {
 	dm.mu.Lock()
 	bucket, exists := dm.domains[domain]
 	if !exists {
-		limiter := rate.NewLimiter(rate.Limit(dm.config.RateLimit), 2)
+		// Inicia com uma taxa baixa e segura. O sistema irá ajustá-la para cima em caso de sucesso.
+		initialRate := rate.Limit(2.0)
+		limiter := rate.NewLimiter(initialRate, 2)
 		bucket = &DomainBucket{limiter: limiter, mode: "AUTO"}
 		dm.domains[domain] = bucket
 		dm.logger.Debugf("[DomainManager] Initialized bucket for domain '%s': Mode: %s, RPS=%.2f, Burst=%d", domain, bucket.mode, bucket.limiter.Limit(), bucket.limiter.Burst())
@@ -113,8 +115,8 @@ func (dm *DomainManager) RecordRequestResult(domain string, statusCode int, err 
 		// Aumenta a taxa aditivamente em caso de sucesso, apenas se não estiver em backoff.
 		if !bucket.inBackoff {
 			newLimit := bucket.limiter.Limit() + 0.2
-			if newLimit > 25.0 { // Define um teto máximo para a taxa
-				newLimit = 25.0
+			if newLimit > rate.Limit(dm.config.MaxRateLimit) { // Usa o teto máximo da config
+				newLimit = rate.Limit(dm.config.MaxRateLimit)
 			}
 			bucket.limiter.SetLimit(newLimit)
 			dm.logger.Debugf("[DomainManager] Success for '%s'. Rate limit increased to %.2f req/s.", domain, newLimit)
