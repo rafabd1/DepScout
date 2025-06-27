@@ -7,6 +7,9 @@ import (
 
 	"DepScout/internal/config"
 	"DepScout/internal/utils"
+
+	"github.com/dop251/goja/ast"
+	"github.com/dop251/goja/parser"
 )
 
 // Processor is responsible for parsing JS files and finding package names.
@@ -41,6 +44,13 @@ func (p *Processor) SetScheduler(s *Scheduler) {
 func (p *Processor) ProcessJSFileContent(sourceURL string, body []byte) error {
 	p.logger.Debugf("Processing content from %s (%d bytes)", sourceURL, len(body))
 
+	if p.config.DeepScan {
+		return p.processWithAST(sourceURL, body)
+	}
+	return p.processWithRegex(sourceURL, body)
+}
+
+func (p *Processor) processWithRegex(sourceURL string, body []byte) error {
 	matches := p.packageRegex.FindAllStringSubmatch(string(body), -1)
 	if len(matches) == 0 {
 		return nil
@@ -67,6 +77,114 @@ func (p *Processor) ProcessJSFileContent(sourceURL string, body []byte) error {
 	}
 
 	return nil
+}
+
+func (p *Processor) processWithAST(sourceURL string, body []byte) error {
+	program, err := parser.ParseFile(nil, sourceURL, string(body), 0)
+	if err != nil {
+		p.logger.Warnf("Failed to parse AST for %s: %v. Falling back to regex.", sourceURL, err)
+		return p.processWithRegex(sourceURL, body)
+	}
+
+	// Use a recursive function to traverse the AST
+	p.traverseAST(program, sourceURL)
+	return nil
+}
+
+// traverseAST recursively traverses the AST nodes looking for require() and import statements
+func (p *Processor) traverseAST(node ast.Node, sourceURL string) {
+	if node == nil {
+		return
+	}
+
+	// Check for require() calls
+	if call, ok := node.(*ast.CallExpression); ok {
+		if ident, ok := call.Callee.(*ast.Identifier); ok && ident.Name == "require" {
+			if len(call.ArgumentList) > 0 {
+				if lit, ok := call.ArgumentList[0].(*ast.StringLiteral); ok {
+					packageName := lit.Value.String()
+
+					p.processFoundPackage(packageName, sourceURL)
+				}
+			}
+		}
+	}
+
+	// Recursively traverse child nodes based on node type
+	switch n := node.(type) {
+	case *ast.Program:
+		for _, stmt := range n.Body {
+			p.traverseAST(stmt, sourceURL)
+		}
+	case *ast.BlockStatement:
+		for _, stmt := range n.List {
+			p.traverseAST(stmt, sourceURL)
+		}
+	case *ast.ExpressionStatement:
+		p.traverseAST(n.Expression, sourceURL)
+	case *ast.CallExpression:
+		p.traverseAST(n.Callee, sourceURL)
+		for _, arg := range n.ArgumentList {
+			p.traverseAST(arg, sourceURL)
+		}
+	case *ast.FunctionDeclaration:
+		if n.Function != nil {
+			p.traverseAST(n.Function.Body, sourceURL)
+		}
+	case *ast.FunctionLiteral:
+		p.traverseAST(n.Body, sourceURL)
+	case *ast.LexicalDeclaration:
+		for _, binding := range n.List {
+			if binding.Initializer != nil {
+				p.traverseAST(binding.Initializer, sourceURL)
+			}
+		}
+	case *ast.VariableStatement:
+		for _, decl := range n.List {
+			p.traverseAST(decl, sourceURL)
+		}
+	case *ast.AssignExpression:
+		p.traverseAST(n.Left, sourceURL)
+		p.traverseAST(n.Right, sourceURL)
+	case *ast.IfStatement:
+		p.traverseAST(n.Test, sourceURL)
+		p.traverseAST(n.Consequent, sourceURL)
+		if n.Alternate != nil {
+			p.traverseAST(n.Alternate, sourceURL)
+		}
+	case *ast.ForStatement:
+		if n.Initializer != nil {
+			p.traverseAST(n.Initializer, sourceURL)
+		}
+		if n.Test != nil {
+			p.traverseAST(n.Test, sourceURL)
+		}
+		if n.Update != nil {
+			p.traverseAST(n.Update, sourceURL)
+		}
+		p.traverseAST(n.Body, sourceURL)
+	case *ast.ReturnStatement:
+		if n.Argument != nil {
+			p.traverseAST(n.Argument, sourceURL)
+		}
+	// Add more cases as needed for other node types
+	}
+}
+
+// processFoundPackage handles a package name found in the AST
+func (p *Processor) processFoundPackage(packageName, sourceURL string) {
+	normalized := p.normalizePackageName(packageName)
+	if p.isPackageWorthChecking(normalized) {
+		if _, loaded := p.checkedPackages.LoadOrStore(normalized, true); !loaded {
+			verifyJob := Job{
+				Input:     normalized,
+				SourceURL: sourceURL,
+				Type:      VerifyPackage,
+			}
+			p.scheduler.addJob(verifyJob)
+		}
+	}
+
 }
 
 // normalizePackageName lida com casos como `pkg/subpath` -> `pkg`

@@ -24,6 +24,8 @@ type Config struct {
 	JsonOutput         bool
 	DeepScan           bool
 	InsecureSkipVerify bool
+	Silent             bool
+	NoColor            bool
 	ParsedProxies      []ProxyEntry // Holds parsed proxy info
 }
 
@@ -79,6 +81,8 @@ func (c *Config) Parse() error {
 	fs.BoolVar(&c.JsonOutput, "json", false, "Enable JSON output format.")
 	fs.BoolVar(&c.DeepScan, "deep-scan", false, "Enable deep scan using AST parsing (slower).")
 	fs.BoolVar(&c.InsecureSkipVerify, "skip-verify", false, "Skip TLS certificate verification.")
+	fs.BoolVar(&c.Silent, "silent", false, "Suppress all output except for findings.")
+	fs.BoolVar(&c.NoColor, "no-color", false, "Disable colorized output.")
 
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		return err
