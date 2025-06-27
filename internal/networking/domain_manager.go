@@ -11,10 +11,11 @@ import (
 )
 
 type DomainManager struct {
-	mu      sync.Mutex
-	domains map[string]*DomainBucket
-	config  *config.Config
-	logger  utils.Logger
+	mu            sync.Mutex
+	domains       map[string]*DomainBucket
+	config        *config.Config
+	logger        *utils.Logger
+	domainBuckets map[string]*rate.Limiter
 }
 
 type DomainBucket struct {
@@ -22,11 +23,12 @@ type DomainBucket struct {
 	mode    string
 }
 
-func NewDomainManager(cfg *config.Config, logger utils.Logger) *DomainManager {
+func NewDomainManager(cfg *config.Config, logger *utils.Logger) *DomainManager {
 	return &DomainManager{
-		domains: make(map[string]*DomainBucket),
-		config:  cfg,
-		logger:  logger,
+		domains:       make(map[string]*DomainBucket),
+		config:        cfg,
+		logger:        logger,
+		domainBuckets: make(map[string]*rate.Limiter),
 	}
 }
 

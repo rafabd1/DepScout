@@ -12,14 +12,14 @@ import (
 // Processor is responsible for parsing JS files and finding package names.
 type Processor struct {
 	config          *config.Config
-	logger          utils.Logger
+	logger          *utils.Logger
 	scheduler       *Scheduler
 	packageRegex    *regexp.Regexp
 	checkedPackages sync.Map // Restaurado para evitar verificações duplicadas
 }
 
 // NewProcessor creates a new Processor instance.
-func NewProcessor(cfg *config.Config, logger utils.Logger) *Processor {
+func NewProcessor(cfg *config.Config, logger *utils.Logger) *Processor {
 	// Regex aprimorada para capturar dependências em `require` e `import`.
 	// Cobre: require('pkg'), require("pkg"), require(`pkg`), import from 'pkg', etc.
 	regex := regexp.MustCompile(`(?i)(?:require\s*\(\s*|import\s+.*?\s+from\s+)['"\x60]([^'"\x60]+)['"\x60]`)
