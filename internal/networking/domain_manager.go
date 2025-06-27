@@ -2,6 +2,7 @@ package networking
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -12,11 +13,12 @@ import (
 )
 
 type DomainManager struct {
-	mu            sync.Mutex
-	domains       map[string]*DomainBucket
-	config        *config.Config
-	logger        *utils.Logger
-	domainBuckets map[string]*rate.Limiter
+	mu               sync.Mutex
+	domains          map[string]*DomainBucket
+	config           *config.Config
+	logger           *utils.Logger
+	domainBuckets    map[string]*rate.Limiter
+	discardedDomains sync.Map
 }
 
 type DomainBucket struct {
@@ -36,7 +38,11 @@ func NewDomainManager(cfg *config.Config, logger *utils.Logger) *DomainManager {
 	}
 }
 
-func (dm *DomainManager) WaitForPermit(ctx context.Context, domain string) {
+func (dm *DomainManager) WaitForPermit(ctx context.Context, domain string) error {
+	if _, isDiscarded := dm.discardedDomains.Load(domain); isDiscarded {
+		return fmt.Errorf("domain %s is discarded", domain)
+	}
+
 	dm.mu.Lock()
 	bucket, exists := dm.domains[domain]
 	if !exists {
@@ -60,7 +66,7 @@ func (dm *DomainManager) WaitForPermit(ctx context.Context, domain string) {
 				timer.Stop()
 				dm.logger.Warnf("[DomainManager] Context canceled for '%s' during backoff wait.", domain)
 				// Do not re-lock, just return. The Wait() below will handle the ctx error.
-				return
+				return ctx.Err()
 			case <-timer.C:
 				// Wait time finished.
 			}
@@ -75,14 +81,16 @@ func (dm *DomainManager) WaitForPermit(ctx context.Context, domain string) {
 
 	if err := bucket.limiter.Wait(ctx); err != nil {
 		dm.logger.Warnf("[DomainManager] Context canceled while waiting for permit to domain '%s'", domain)
+		return err
 	}
+	return nil
 }
 
 func (dm *DomainManager) RecordRequestSent(domain string) {
 	// Pode ser expandido no futuro
 }
 
-func (dm *DomainManager) RecordRequestResult(domain string, statusCode int, err error) {
+func (dm *DomainManager) RecordRequestResult(domain string, statusCode int, err error) (justDiscarded bool) {
 	dm.mu.Lock()
 	defer dm.mu.Unlock()
 
@@ -111,6 +119,13 @@ func (dm *DomainManager) RecordRequestResult(domain string, statusCode int, err 
 
 		dm.logger.Warnf("[DomainManager] 429 for '%s'. Rate limit reduced to %.2f req/s. Backoff for %s.", domain, newLimit, backoffDuration)
 
+		if bucket.retryCounter > 5 { // Limite de 5 retries de 429 para um domínio
+			_, loaded := dm.discardedDomains.LoadOrStore(domain, true)
+			if !loaded {
+				return true // Sinaliza que o domínio acabou de ser descartado
+			}
+		}
+
 	case statusCode >= 200 && statusCode < 400:
 		// Aumenta a taxa aditivamente em caso de sucesso, apenas se não estiver em backoff.
 		if !bucket.inBackoff {
@@ -127,4 +142,5 @@ func (dm *DomainManager) RecordRequestResult(domain string, statusCode int, err 
 		bucket.limiter.SetLimit(newLimit)
 		dm.logger.Warnf("[DomainManager] Network error for '%s'. Rate limit reduced to %.2f req/s.", domain, newLimit)
 	}
+	return false
 }

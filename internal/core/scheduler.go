@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"DepScout/internal/config"
@@ -56,6 +57,8 @@ type Scheduler struct {
 	jobsWg        sync.WaitGroup
 	workersWg     sync.WaitGroup
 	initialAddWg  sync.WaitGroup
+	requestCount atomic.Int64
+	stopRpsCounter chan bool
 }
 
 // NewScheduler creates a new Scheduler instance.
@@ -77,6 +80,7 @@ func NewScheduler(
 		reporter:      reporter,
 		progBar:       progBar,
 		jobQueue:      make(chan Job, cfg.Concurrency*2),
+		stopRpsCounter: make(chan bool),
 	}
 }
 
@@ -114,6 +118,7 @@ func (s *Scheduler) StartScan() {
 	for i := 0; i < s.config.Concurrency; i++ {
 		go s.worker()
 	}
+	s.startRpsCounter()
 }
 
 func (s *Scheduler) Wait() {
@@ -121,6 +126,7 @@ func (s *Scheduler) Wait() {
 	s.jobsWg.Wait()       // Espera todos os jobs (iniciais e subsequentes) serem processados.
 	close(s.jobQueue)
 	s.workersWg.Wait()
+	s.stopRpsCounter <- true // Para o contador de RPS
 }
 
 func (s *Scheduler) worker() {
@@ -176,10 +182,20 @@ func (s *Scheduler) processFetchJob(ctx context.Context, job Job) {
 			return
 		}
 		job.BaseDomain = u.Hostname()
-		s.domainManager.WaitForPermit(ctx, job.BaseDomain)
+
+		if err := s.domainManager.WaitForPermit(ctx, job.BaseDomain); err != nil {
+			s.handleJobFailure(job, err)
+			return
+		}
+
+		s.requestCount.Add(1)
 		reqData := networking.RequestData{URL: job.Input, Method: "GET", Ctx: ctx}
 		respData := s.client.Do(reqData)
-		s.domainManager.RecordRequestResult(job.BaseDomain, respData.StatusCode, respData.Error)
+		justDiscarded := s.domainManager.RecordRequestResult(job.BaseDomain, respData.StatusCode, respData.Error)
+
+		if justDiscarded {
+			s.logger.PublicWarnf("Domain '%s' has been discarded due to excessive 429 responses. All subsequent requests to this domain will be ignored.", job.BaseDomain)
+		}
 
 		// Se recebermos um 429, reenfileiramos o job para uma nova tentativa, se o limite não foi atingido.
 		if respData.StatusCode == 429 {
@@ -236,6 +252,7 @@ func (s *Scheduler) processVerifyPackageJob(ctx context.Context, job Job) {
 	checkURL := "https://registry.npmjs.org/" + url.PathEscape(packageName)
 	reqData := networking.RequestData{URL: checkURL, Method: "HEAD", Ctx: ctx}
 	s.logger.Debugf("Verifying package '%s' at %s", packageName, checkURL)
+	s.requestCount.Add(1)
 	respData := s.client.Do(reqData)
 	if respData.Error != nil {
 		s.handleJobFailure(job, respData.Error)
@@ -276,4 +293,30 @@ func (s *Scheduler) handleJobFailure(job Job, err error) {
 
 func NewJob(input string, jobType JobType) Job {
 	return Job{Input: input, SourceURL: input, Type: jobType, Retries: 0}
+}
+
+func (s *Scheduler) startRpsCounter() {
+	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		lastCount := int64(0)
+		lastTime := time.Now()
+
+		for {
+			select {
+			case <-s.stopRpsCounter:
+				return
+			case <-ticker.C:
+				currentCount := s.requestCount.Load()
+				currentTime := time.Now()
+				duration := currentTime.Sub(lastTime).Seconds()
+				if duration > 0 {
+					rps := float64(currentCount-lastCount) / duration
+					s.progBar.SetRPS(rps)
+				}
+				lastCount = currentCount
+				lastTime = currentTime
+			}
+		}
+	}()
 }
