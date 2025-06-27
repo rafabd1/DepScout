@@ -5,17 +5,6 @@ import (
 	"strings"
 )
 
-// cleanURL remove query parameters and fragments from a URL string.
-func cleanURL(rawURL string) string {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return rawURL // Return original if parsing fails
-	}
-	u.RawQuery = ""
-	u.Fragment = ""
-	return u.String()
-}
-
 // GetBaseURL returns the scheme and host part of a URL.
 func GetBaseURL(rawURL string) (string, error) {
 		u, err := url.Parse(rawURL)

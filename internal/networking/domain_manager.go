@@ -136,11 +136,6 @@ func (dm *DomainManager) RecordRequestResult(domain string, statusCode int, err 
 			bucket.limiter.SetLimit(newLimit)
 			dm.logger.Debugf("[DomainManager] Success for '%s'. Rate limit increased to %.2f req/s.", domain, newLimit)
 		}
-	case err != nil:
-		// Reduz a taxa para outros erros de rede também
-		newLimit := bucket.limiter.Limit() * 0.9
-		bucket.limiter.SetLimit(newLimit)
-		dm.logger.Warnf("[DomainManager] Network error for '%s'. Rate limit reduced to %.2f req/s.", domain, newLimit)
 	}
 	return false
 }
