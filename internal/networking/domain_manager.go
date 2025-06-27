@@ -141,3 +141,52 @@ func (dm *DomainManager) RecordRequestResult(domain string, statusCode int, err 
 	}
 	return false
 }
+
+// IsDomainInBackoff checks if a domain is currently in backoff period
+func (dm *DomainManager) IsDomainInBackoff(domain string) bool {
+	dm.mu.Lock()
+	defer dm.mu.Unlock()
+	
+	bucket, exists := dm.domains[domain]
+	if !exists {
+		return false
+	}
+	
+	// Check if backoff period has expired
+	if bucket.inBackoff && time.Now().After(bucket.nextAttempt) {
+		bucket.inBackoff = false
+		dm.logger.Infof("[DomainManager] Backoff period for '%s' has ended automatically.", domain)
+		return false
+	}
+	
+	return bucket.inBackoff
+}
+
+// GetBlockedDomains returns a list of domains currently in backoff
+func (dm *DomainManager) GetBlockedDomains() []string {
+	dm.mu.Lock()
+	defer dm.mu.Unlock()
+	
+	var blocked []string
+	now := time.Now()
+	
+	for domain, bucket := range dm.domains {
+		if bucket.inBackoff {
+			if now.After(bucket.nextAttempt) {
+				// Backoff expired, clear it
+				bucket.inBackoff = false
+				dm.logger.Infof("[DomainManager] Backoff period for '%s' has ended automatically.", domain)
+			} else {
+				blocked = append(blocked, domain)
+			}
+		}
+	}
+	
+	return blocked
+}
+
+// IsDiscarded checks if a domain has been permanently discarded
+func (dm *DomainManager) IsDiscarded(domain string) bool {
+	_, isDiscarded := dm.discardedDomains.Load(domain)
+	return isDiscarded
+}
