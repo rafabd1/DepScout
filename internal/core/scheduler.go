@@ -11,11 +11,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"DepScout/internal/config"
-	"DepScout/internal/networking"
-	"DepScout/internal/output"
-	"DepScout/internal/report"
-	"DepScout/internal/utils"
+	"github.com/rafabd1/DepScout/internal/config"
+	"github.com/rafabd1/DepScout/internal/networking"
+	"github.com/rafabd1/DepScout/internal/output"
+	"github.com/rafabd1/DepScout/internal/report"
+	"github.com/rafabd1/DepScout/internal/utils"
 )
 
 // JobType define o tipo de trabalho que um Job representa.

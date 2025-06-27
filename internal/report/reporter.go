@@ -6,8 +6,8 @@ import (
 	"os"
 	"sync"
 
-	"DepScout/internal/config"
-	"DepScout/internal/utils"
+	"github.com/rafabd1/DepScout/internal/config"
+	"github.com/rafabd1/DepScout/internal/utils"
 )
 
 // Status constants for Findings

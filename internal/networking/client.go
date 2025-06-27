@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"DepScout/internal/utils"
+	"github.com/rafabd1/DepScout/internal/utils"
 )
 
 // Client is a wrapper around an HTTP client with connection pooling and proxy support.

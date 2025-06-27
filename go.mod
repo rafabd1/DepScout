@@ -1,4 +1,4 @@
-module DepScout
+module github.com/rafabd1/DepScout
 
 go 1.24.1
 
