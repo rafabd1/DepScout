@@ -4,9 +4,22 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 )
+
+// stringSlice is a custom type for handling multiple string flags
+type stringSlice []string
+
+func (i *stringSlice) String() string {
+	return "my string representation"
+}
+
+func (i *stringSlice) Set(value string) error {
+	*i = append(*i, value)
+	return nil
+}
 
 // Config holds all the configuration for the application.
 type Config struct {
@@ -15,9 +28,10 @@ type Config struct {
 	Concurrency        int
 	Timeout            int
 	MaxRateLimit       int
-	MaxFileSize        int // in KB
+	MaxFileSize        int64 // in KB
 	NoLimit            bool
 	Headers            stringSlice
+	Proxy              string
 	ProxyFile          string
 	OutputFile         string
 	Verbose            bool
@@ -26,13 +40,7 @@ type Config struct {
 	InsecureSkipVerify bool
 	Silent             bool
 	NoColor            bool
-	ParsedProxies      []ProxyEntry // Holds parsed proxy info
-}
-
-// ProxyEntry is a struct to hold the parsed proxy URL and its type
-type ProxyEntry struct {
-	URL  string
-	Type string // "http", "https", "socks5"
+	LoadedProxies      []*url.URL
 }
 
 // NewConfig creates a new Config object with default values.
@@ -42,17 +50,20 @@ func NewConfig() *Config {
 		Directory:          "",
 		Concurrency:        25,
 		Timeout:            10,
-		MaxRateLimit:       30, // Default max rate limit of 30 req/s
+		MaxRateLimit:       30,
 		MaxFileSize:        10240, // Default 10MB max file size
 		NoLimit:            false,
 		Headers:            []string{},
+		Proxy:              "",
 		ProxyFile:          "",
 		OutputFile:         "",
 		Verbose:            false,
 		JsonOutput:         false,
 		DeepScan:           false,
 		InsecureSkipVerify: false,
-		ParsedProxies:      []ProxyEntry{},
+		Silent:             false,
+		NoColor:            false,
+		LoadedProxies:      make([]*url.URL, 0),
 	}
 }
 
@@ -71,9 +82,12 @@ func (c *Config) Parse() error {
 	fs.IntVar(&c.Concurrency, "c", 25, "Number of concurrent workers.")
 	fs.IntVar(&c.Timeout, "t", 10, "Request timeout in seconds.")
 	fs.IntVar(&c.MaxRateLimit, "l", 30, "Maximum requests per second per domain in auto-adjustment mode.")
-	fs.IntVar(&c.MaxFileSize, "max-file-size", 10240, "Maximum file size to process in KB.")
+	fs.Int64Var(&c.MaxFileSize, "max-file-size", 10240, "Maximum file size to process in KB.")
 	fs.BoolVar(&c.NoLimit, "no-limit", false, "Disable file size limit.")
+
+	fs.StringVar(&c.Proxy, "proxy", "", "A single proxy server (e.g. http://127.0.0.1:8080).")
 	fs.StringVar(&c.ProxyFile, "p", "", "File containing a list of proxies (http/https/socks5).")
+
 	fs.StringVar(&c.OutputFile, "o", "", "File to write output to.")
 	fs.Var(&c.Headers, "H", "Custom header to include in all requests (can be used multiple times).")
 
@@ -108,13 +122,13 @@ func (c *Config) Parse() error {
 			for scanner.Scan() {
 				c.Targets = append(c.Targets, strings.TrimSpace(scanner.Text()))
 			}
-		} else {
+		} else if singleTarget == "" && targetFile == "" && c.Directory == "" {
 			return flag.ErrHelp
 		}
 	}
-	
-	if c.ProxyFile != "" {
-		// Proxy parsing logic would go here if needed again
+
+	if c.ProxyFile != "" && c.Proxy != "" {
+		return fmt.Errorf("cannot use both -proxy and -p flags at the same time")
 	}
 
 	if len(c.Targets) == 0 && c.Directory == "" && singleTarget == "" && targetFile == "" {
@@ -138,16 +152,4 @@ func readLines(path string) ([]string, error) {
 		lines = append(lines, scanner.Text())
 	}
 	return lines, scanner.Err()
-}
-
-// stringSlice is a custom type for handling multiple string flags
-type stringSlice []string
-
-func (i *stringSlice) String() string {
-	return "my string representation"
-}
-
-func (i *stringSlice) Set(value string) error {
-	*i = append(*i, value)
-	return nil
 } 

@@ -21,7 +21,7 @@
 </div>
 
 <p align="center">
-    <b>A high-performance, concurrent scanner for detecting Dependency Confusion vulnerabilities.</b>
+    <b>A high-performance, concurrent scanner for detecting unclaimed packages.</b>
 </p>
 
 ## Features
@@ -74,11 +74,6 @@ Scan a local directory of JS files using the high-accuracy deep scan mode:
 depscout -d /path/to/js/files --deep-scan
 ```
 
-Scan a list of URLs from a file, increase concurrency, and save results to a JSON file:
-```bash
-cat urls.txt | depscout -c 100 -o results.json --json
-```
-
 ## Command Line Options
 
 | Flag | Description | Default |
@@ -92,7 +87,7 @@ cat urls.txt | depscout -c 100 -o results.json --json
 | `-o` | File to write output to. | stdout |
 | `-p` | File containing a list of proxies (http/https/socks5). | - |
 | `--deep-scan` | Enable deep scan using AST parsing (slower but more accurate). | `false` |
-| `--json` | Enable JSON output format. | `false` |
+| `-json` | Enable JSON output format. | `false` |
 | `--max-file-size` | Maximum file size to process in KB. | `10240` |
 | `--no-limit` | Disable file size limit. | `false` |
 | `--skip-verify` | Skip TLS certificate verification. | `false` |
