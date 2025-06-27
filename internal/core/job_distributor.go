@@ -27,12 +27,17 @@ type JobDistributor struct {
 func NewJobDistributor(maxConcurrency int) *JobDistributor {
 	ctx, cancel := context.WithCancel(context.Background())
 	
+	// Calculate appropriate queue sizes based on expected workload
+	// Global queue needs to handle many VerifyPackage jobs from JS processing
+	globalQueueSize := maxConcurrency * 50  // Much larger for VerifyPackage jobs
+	domainQueueSize := maxConcurrency * 10  // Reasonable size for domain-specific FetchJS jobs
+	
 	return &JobDistributor{
 		domainQueues:     make(map[string]chan Job),
-		globalQueue:      make(chan Job, maxConcurrency*2),
+		globalQueue:      make(chan Job, globalQueueSize),
 		availableDomains: make([]string, 0),
 		domainJobCounts:  make(map[string]int),
-		maxQueueSize:     maxConcurrency * 2, // Buffer size per domain
+		maxQueueSize:     domainQueueSize,
 		distributorCtx:   ctx,
 		distributorCancel: cancel,
 	}
@@ -41,21 +46,25 @@ func NewJobDistributor(maxConcurrency int) *JobDistributor {
 // AddJob adds a job to the appropriate domain queue or global queue
 func (jd *JobDistributor) AddJob(job Job) error {
 	jd.mu.Lock()
-	defer jd.mu.Unlock()
-
 	if jd.closed {
+		jd.mu.Unlock()
 		return fmt.Errorf("job distributor is closed")
 	}
 
 	domain := jd.extractDomain(job)
 	
 	if domain == "" {
+		jd.mu.Unlock()
 		// Non-domain jobs (local files, ProcessJS, VerifyPackage) go to global queue
+		// Use a timeout to avoid indefinite blocking
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		
 		select {
 		case jd.globalQueue <- job:
 			return nil
-		default:
-			return fmt.Errorf("global queue is full")
+		case <-ctx.Done():
+			return fmt.Errorf("timeout waiting for global queue space")
 		}
 	}
 
@@ -65,19 +74,30 @@ func (jd *JobDistributor) AddJob(job Job) error {
 		jd.domainJobCounts[domain] = 0
 	}
 
-	// Add to domain-specific queue
+	queue := jd.domainQueues[domain]
+	jd.domainJobCounts[domain]++
+	jd.updateAvailableDomains()
+	jd.mu.Unlock()
+
+	// Try to add to domain-specific queue with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	
 	select {
-	case jd.domainQueues[domain] <- job:
-		jd.domainJobCounts[domain]++
-		jd.updateAvailableDomains()
+	case queue <- job:
 		return nil
-	default:
-		// Domain queue is full, add to global queue as fallback
+	case <-ctx.Done():
+		// Domain queue is full, try global queue as fallback
+		jd.mu.Lock()
+		jd.domainJobCounts[domain]-- // Revert the count since job wasn't actually added
+		jd.updateAvailableDomains()
+		jd.mu.Unlock()
+		
 		select {
 		case jd.globalQueue <- job:
 			return nil
-		default:
-			return fmt.Errorf("both domain and global queues are full")
+		case <-time.After(5 * time.Second):
+			return fmt.Errorf("timeout: both domain and global queues are full")
 		}
 	}
 }

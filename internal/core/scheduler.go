@@ -210,11 +210,9 @@ func (s *Scheduler) processFetchJob(ctx context.Context, job Job) {
 	}
 		job.BaseDomain = u.Hostname()
 
-		// Use a separate, longer context for waiting on the rate limiter permit
-		// to avoid premature job timeouts on busy domains.
-		waitCtx, waitCancel := context.WithTimeout(context.Background(), 90*time.Second)
-		defer waitCancel()
-		if err := s.domainManager.WaitForPermit(waitCtx, job.BaseDomain); err != nil {
+		// Wait for rate limiting permit without separate timeout
+		// Only the HTTP request itself should have a timeout
+		if err := s.domainManager.WaitForPermit(context.Background(), job.BaseDomain); err != nil {
 			s.handleJobFailure(job, err)
 		return
 	}
