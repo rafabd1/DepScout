@@ -53,7 +53,7 @@ type Scheduler struct {
 	logger         *utils.Logger
 	reporter       *report.Reporter
 	progBar        *output.ProgressBar
-	jobQueue       chan Job
+	jobDistributor *JobDistributor
 	jobsWg         sync.WaitGroup
 	producersWg    sync.WaitGroup
 	workersWg      sync.WaitGroup
@@ -73,14 +73,14 @@ func NewScheduler(
 	progBar *output.ProgressBar,
 ) *Scheduler {
 	return &Scheduler{
-		config:        cfg,
-		client:        client,
-		processor:     processor,
-		domainManager: domainManager,
-		logger:        logger,
-		reporter:      reporter,
-		progBar:       progBar,
-		jobQueue:      make(chan Job, cfg.Concurrency*2),
+		config:         cfg,
+		client:         client,
+		processor:      processor,
+		domainManager:  domainManager,
+		logger:         logger,
+		reporter:       reporter,
+		progBar:        progBar,
+		jobDistributor: NewJobDistributor(cfg.Concurrency),
 		stopRpsCounter: make(chan bool),
 	}
 }
@@ -89,7 +89,11 @@ func NewScheduler(
 // Ele garante que o WaitGroup seja incrementado corretamente.
 func (s *Scheduler) AddJob(job Job) {
 	s.jobsWg.Add(1)
-	s.jobQueue <- job
+	err := s.jobDistributor.AddJob(job)
+	if err != nil {
+		s.logger.Errorf("Failed to add job to distributor: %v", err)
+		s.jobsWg.Done() // Decrement since job wasn't actually added
+	}
 }
 
 // AddJobAsync adiciona um job de forma assíncrona para evitar deadlocks.
@@ -104,7 +108,11 @@ func (s *Scheduler) AddJobAsync(job Job) {
 // requeueJob adiciona um trabalho de volta à fila sem incrementar o WaitGroup.
 // Usado para retries onde o trabalho original já foi contabilizado.
 func (s *Scheduler) requeueJob(job Job) {
-	s.jobQueue <- job
+	err := s.jobDistributor.AddJob(job)
+	if err != nil {
+		s.logger.Errorf("Failed to requeue job: %v", err)
+		s.jobsWg.Done() // Complete the job since it can't be requeued
+	}
 }
 
 // AddInitialTargets adiciona uma lista de alvos iniciais ao scheduler.
@@ -112,14 +120,14 @@ func (s *Scheduler) requeueJob(job Job) {
 // o que é o comportamento esperado, pois os workers já estarão processando.
 func (s *Scheduler) AddInitialTargets(targets []string) {
 	s.initialAddWg.Add(1)
-	go func() {
+		go func() {
 		defer s.initialAddWg.Done()
 		for _, target := range targets {
 			if target != "" {
 				s.AddJob(NewJob(target, FetchJS))
+				}
 			}
-		}
-	}()
+		}()
 }
 
 // StartScan begins the scanning process.
@@ -135,14 +143,22 @@ func (s *Scheduler) Wait() {
 	s.initialAddWg.Wait() // Espera a adição inicial de jobs terminar.
 	s.jobsWg.Wait()       // Espera todos os jobs (iniciais e subsequentes) serem processados.
 	s.producersWg.Wait()  // Espera todas as goroutines produtoras de jobs terminarem.
-	close(s.jobQueue)
+	s.jobDistributor.Close()
 	s.workersWg.Wait()
 	s.stopRpsCounter <- true // Para o contador de RPS
 }
 
 func (s *Scheduler) worker() {
 	defer s.workersWg.Done()
-	for job := range s.jobQueue {
+	workerID := int(s.requestCount.Load()) % s.config.Concurrency
+	
+	for {
+		job, ok := s.jobDistributor.GetNextJob(workerID)
+		if !ok {
+			// No more jobs available, worker can exit
+			break
+		}
+		
 		// Use a timeout for each job's context
 		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(s.config.Timeout)*time.Second)
 		switch job.Type {
@@ -172,26 +188,26 @@ func (s *Scheduler) processFetchJob(ctx context.Context, job Job) {
 			fileInfo, statErr := os.Stat(job.Input)
 			if statErr != nil {
 				s.handleJobFailure(job, fmt.Errorf("failed to stat local file: %w", statErr))
-				return
-			}
+		return
+	}
 			if fileInfo.Size() > maxBytes {
 				s.logger.Warnf("Skipping local file %s, size (%d KB) exceeds limit (%d KB)", job.Input, fileInfo.Size()/1024, s.config.MaxFileSize)
 				s.handleJobFailure(job, fmt.Errorf("file size exceeds limit"))
-				return
-			}
+		return
+	}
 		}
 
 		body, err = os.ReadFile(job.Input)
 		if err != nil {
 			s.handleJobFailure(job, fmt.Errorf("failed to read local file: %w", err))
-			return
-		}
-	} else {
+		return
+	}
+			} else {
 		u, parseErr := url.Parse(job.Input)
 		if parseErr != nil {
 			s.handleJobFailure(job, parseErr)
-			return
-		}
+		return
+	}
 		job.BaseDomain = u.Hostname()
 
 		// Use a separate, longer context for waiting on the rate limiter permit
@@ -200,8 +216,8 @@ func (s *Scheduler) processFetchJob(ctx context.Context, job Job) {
 		defer waitCancel()
 		if err := s.domainManager.WaitForPermit(waitCtx, job.BaseDomain); err != nil {
 			s.handleJobFailure(job, err)
-			return
-		}
+		return
+	}
 
 		s.requestCount.Add(1)
 		reqData := networking.RequestData{URL: job.Input, Method: "GET", Ctx: ctx}
@@ -218,12 +234,12 @@ func (s *Scheduler) processFetchJob(ctx context.Context, job Job) {
 				job.Retries++
 				s.logger.Warnf("Re-queueing job for %s due to 429. Attempt %d.", job.Input, job.Retries)
 				s.requeueJob(job) // Usa requeueJob para não incrementar o WaitGroup novamente
-			} else {
+	} else {
 				s.logger.Errorf("Job for %s failed after %d retries due to 429.", job.Input, job.Retries)
 				s.handleJobFailure(job, fmt.Errorf("HTTP status 429 after max retries"))
 			}
-			return
-		}
+				return
+			}
 
 		if respData.Error != nil || respData.StatusCode >= 400 {
 			err = respData.Error
@@ -231,8 +247,8 @@ func (s *Scheduler) processFetchJob(ctx context.Context, job Job) {
 				err = fmt.Errorf("HTTP status %d", respData.StatusCode)
 			}
 			s.handleJobFailure(job, err)
-			return
-		}
+				return
+			}
 		defer respData.Response.Body.Close()
 
 		var limitedReader io.Reader = respData.Response.Body
@@ -243,14 +259,15 @@ func (s *Scheduler) processFetchJob(ctx context.Context, job Job) {
 
 		if err != nil {
 			s.handleJobFailure(job, err)
-			return
-		}
+					return
+				}
 		if !s.config.NoLimit && int64(len(body)) == maxBytes {
 			s.logger.Warnf("File at %s may have been truncated as it reached the size limit of %d KB", job.Input, s.config.MaxFileSize)
 		}
 	}
 
-	processJob := NewJob(job.SourceURL, ProcessJS)
+	processJob := NewJob(job.Input, ProcessJS)
+	processJob.SourceURL = job.Input
 	processJob.Body = body
 	s.AddJobAsync(processJob)
 
@@ -266,8 +283,8 @@ func (s *Scheduler) processVerifyPackageJob(ctx context.Context, job Job) {
 	respData := s.client.Do(reqData)
 	if respData.Error != nil {
 		s.handleJobFailure(job, respData.Error)
-		return
-	}
+					return
+				}
 	defer respData.Response.Body.Close()
 
 	if respData.StatusCode == 404 {
@@ -278,7 +295,7 @@ func (s *Scheduler) processVerifyPackageJob(ctx context.Context, job Job) {
 		})
 	} else if respData.StatusCode == 200 {
 		s.logger.Debugf("Package '%s' is claimed.", packageName)
-	} else {
+		} else {
 		s.logger.Warnf("Unexpected status code %d for package '%s'", respData.StatusCode, packageName)
 	}
 	// Nota: VerifyPackage jobs não incrementam a barra de progresso
@@ -313,9 +330,9 @@ func (s *Scheduler) startRpsCounter() {
 		lastTime := time.Now()
 
 		for {
-			select {
+	select {
 			case <-s.stopRpsCounter:
-				return
+		return
 			case <-ticker.C:
 				currentCount := s.requestCount.Load()
 				currentTime := time.Now()

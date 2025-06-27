@@ -18,8 +18,8 @@ func cleanURL(rawURL string) string {
 
 // GetBaseURL returns the scheme and host part of a URL.
 func GetBaseURL(rawURL string) (string, error) {
-	u, err := url.Parse(rawURL)
-	if err != nil {
+		u, err := url.Parse(rawURL)
+		if err != nil {
 		return "", err
 	}
 	return u.Scheme + "://" + u.Host, nil
@@ -32,9 +32,9 @@ func IsSameDomain(url1, url2 string) bool {
 		return false
 	}
 	host2, err := GetHost(url2)
-	if err != nil {
-		return false
-	}
+		if err != nil {
+	return false
+}
 	return host1 == host2
 }
 

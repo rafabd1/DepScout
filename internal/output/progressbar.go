@@ -24,7 +24,7 @@ type ProgressBar struct {
 
 // NewProgressBar creates a new ProgressBar.
 func NewProgressBar(controller *TerminalController) *ProgressBar {
-	return &ProgressBar{
+    return &ProgressBar{
 		controller: controller,
 		done:       make(chan bool),
 	}
@@ -38,7 +38,7 @@ func (p *ProgressBar) SetMutex(mu *sync.Mutex) {
 // SetRPS sets the current requests per second value.
 func (p *ProgressBar) SetRPS(rps float64) {
 	atomic.StoreUint64(&p.requestsPerSecond, math.Float64bits(rps))
-}
+                }
 
 // Start begins rendering the progress bar.
 func (p *ProgressBar) Start(total int) {
@@ -62,7 +62,7 @@ func (p *ProgressBar) Stop() {
 
 	// Now that we are sure the run() goroutine is done, we can safely clear the line.
 	p.Clear()
-}
+    }
 
 // Increment increases the progress count by one.
 func (p *ProgressBar) Increment() {
@@ -96,7 +96,7 @@ func (p *ProgressBar) run() {
 			p.mu.Lock()
 			p.render()
 			p.mu.Unlock()
-			return
+        return
 		case <-p.ticker.C:
 			p.mu.Lock()
 			p.render()

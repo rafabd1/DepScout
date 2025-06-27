@@ -64,7 +64,7 @@ func main() {
 	}
 	if cfg.ProxyFile != "" {
 		fileProxies, err := networking.LoadProxiesFromFile(cfg.ProxyFile)
-		if err != nil {
+				if err != nil {
 			fmt.Fprintf(os.Stderr, "Error loading proxy file: %v\n", err)
 			os.Exit(1)
 		}
@@ -97,8 +97,8 @@ func main() {
 			if err != nil { return err }
 			if !info.IsDir() && (strings.HasSuffix(strings.ToLower(info.Name()), ".js") || strings.HasSuffix(strings.ToLower(info.Name()), ".ts")) {
 				cfg.Targets = append(cfg.Targets, path)
-			}
-			return nil
+		}
+		return nil
 		})
 
 		if err != nil {
@@ -107,7 +107,7 @@ func main() {
 		}
 	}
 
-	if len(cfg.Targets) == 0 {
+		if len(cfg.Targets) == 0 {
 		fmt.Fprintln(os.Stderr, "No targets to scan. Provide targets via -u, -f, -d, or stdin.")
 		os.Exit(0)
 	}

@@ -108,7 +108,7 @@ func (c *Config) Parse() error {
 	}
 	if targetFile != "" {
 		lines, err := readLines(targetFile)
-		if err != nil {
+	if err != nil {
 			return fmt.Errorf("error reading target file: %w", err)
 		}
 		c.Targets = append(c.Targets, lines...)
@@ -120,7 +120,10 @@ func (c *Config) Parse() error {
 		if (stat.Mode() & os.ModeCharDevice) == 0 {
 			scanner := bufio.NewScanner(os.Stdin)
 			for scanner.Scan() {
-				c.Targets = append(c.Targets, strings.TrimSpace(scanner.Text()))
+				line := strings.TrimSpace(scanner.Text())
+				if line != "" { // Filter out empty lines
+					c.Targets = append(c.Targets, line)
+				}
 			}
 		} else if singleTarget == "" && targetFile == "" && c.Directory == "" {
 			return flag.ErrHelp
@@ -149,7 +152,10 @@ func readLines(path string) ([]string, error) {
 	var lines []string
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
-		lines = append(lines, scanner.Text())
+		line := strings.TrimSpace(scanner.Text())
+		if line != "" { // Filter out empty lines
+			lines = append(lines, line)
+		}
 	}
 	return lines, scanner.Err()
 } 
