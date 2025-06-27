@@ -35,5 +35,5 @@ dev/
 
 *.log
 
-proxies.txt
+*.txt
 CHECKLIST.md
