@@ -17,6 +17,13 @@ import (
 	"DepScout/internal/utils"
 )
 
+var version = "0.1.0" // Version is set during build time
+
+const (
+	colorCyan   = "\033[36m"
+	colorReset  = "\033[0m"
+)
+
 func main() {
 	cfg := config.NewConfig()
 	if err := cfg.Parse(); err != nil {
@@ -26,6 +33,28 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		fmt.Fprintln(os.Stderr, "Use -h or --help for usage.")
 		os.Exit(1)
+	}
+
+	if !cfg.Silent {
+		banner := `
+  _____             _____                 _   
+ |  __ \           / ____|               | |  
+ | |  | | ___ _ __| (___   ___ ___  _   _| |_ 
+ | |  | |/ _ \ '_ \\___ \ / __/ _ \| | | | __|
+ | |__| |  __/ |_) |___) | (_| (_) | |_| | |_ 
+ |_____/ \___| .__/_____/ \___\___/ \__,_|\__|
+             | |                              
+             |_|                              `
+		
+		author := "github.com/rafabd1"
+		
+		if !cfg.NoColor {
+			fmt.Printf("%s%s%s\n", colorCyan, banner, colorReset)
+			fmt.Printf("%s\t\tUnclaimed Dependencies Scanner | v%s by %s%s\n\n", colorCyan, version, author, colorReset)
+		} else {
+			fmt.Printf("%s\n", banner)
+			fmt.Printf("\t\tUnclaimed Dependencies Scanner | v%s by %s\n\n", version, author)
+		}
 	}
 
 	// Add files from directory to targets
@@ -118,6 +147,9 @@ func logInitialSettings(logger *utils.Logger, cfg *config.Config) {
 		settings = append(settings, "File Size Limit: Disabled")
 	} else {
 		settings = append(settings, fmt.Sprintf("File Size Limit: %d KB", cfg.MaxFileSize))
+	}
+	if cfg.DeepScan {
+		settings = append(settings, "Deep Scan: Enabled")
 	}
 	if cfg.InsecureSkipVerify {
 		settings = append(settings, "TLS Verification: Disabled")
