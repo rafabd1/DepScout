@@ -58,22 +58,6 @@ func (r *Reporter) AddFinding(finding Finding) {
 	defer r.mu.Unlock()
 
 	r.findings = append(r.findings, finding)
-
-	if r.config.JsonOutput {
-		jsonLine, err := json.Marshal(finding)
-		if err == nil {
-			if r.outputFile != nil {
-				r.outputFile.Write(append(jsonLine, '\n'))
-			} else {
-				// If no output file, print JSON to stdout
-				fmt.Println(string(jsonLine))
-			}
-		}
-	} else if r.outputFile != nil {
-		// Plain text output to file
-		line := fmt.Sprintf("Package: %s, Source: %s\n", finding.UnclaimedPackage, finding.FoundInSourceURL)
-		r.outputFile.WriteString(line)
-	}
 }
 
 // GetFindingsCount returns the number of findings.
@@ -83,22 +67,48 @@ func (r *Reporter) GetFindingsCount() int {
 	return len(r.findings)
 }
 
-// Print displays the final report to the console.
+// Print displays the final report.
 func (r *Reporter) Print() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	// If JSON output is to stdout, it has already been printed.
-	if r.config.JsonOutput && r.outputFile == nil {
+	if r.config.Silent && len(r.findings) == 0 {
 		return
 	}
 
-	if len(r.findings) > 0 {
-		r.logger.Infof("Found %d unclaimed dependencies:", len(r.findings))
-		for _, f := range r.findings {
-			r.logger.Successf("  [+] Package: %s", f.UnclaimedPackage)
-			if r.config.Verbose {
-				r.logger.Infof("      Source:  %s", f.FoundInSourceURL)
+	// Handle file output (JSON or text based on config)
+	if r.outputFile != nil {
+		if r.config.JsonOutput {
+			// Write JSON to file
+			encoder := json.NewEncoder(r.outputFile)
+			encoder.SetIndent("", "  ")
+			err := encoder.Encode(r.findings)
+			if err != nil {
+				r.logger.Errorf("Failed to write JSON output to file: %v", err)
+			}
+		} else {
+			// Write text format to file
+			if len(r.findings) > 0 {
+				r.outputFile.WriteString(fmt.Sprintf("Found %d unclaimed dependencies:\n", len(r.findings)))
+				for _, f := range r.findings {
+					r.outputFile.WriteString(fmt.Sprintf("  [+] Package: %s\n", f.UnclaimedPackage))
+					if r.config.Verbose {
+						r.outputFile.WriteString(fmt.Sprintf("      Source:  %s\n", f.FoundInSourceURL))
+					}
+				}
+			}
+		}
+	}
+
+	// Always display human-readable format in terminal (unless silent)
+	if !r.config.Silent {
+		if len(r.findings) > 0 {
+			r.logger.Infof("Found %d unclaimed dependencies:", len(r.findings))
+			for _, f := range r.findings {
+				r.logger.Successf("  [+] Package: %s", f.UnclaimedPackage)
+				if r.config.Verbose {
+					r.logger.Infof("      Source:  %s", f.FoundInSourceURL)
+				}
 			}
 		}
 	}

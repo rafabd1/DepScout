@@ -46,18 +46,19 @@ type Job struct {
 
 // Scheduler orchestrates the scanning process.
 type Scheduler struct {
-	config        *config.Config
-	client        *networking.Client
-	processor     *Processor
-	domainManager *networking.DomainManager
-	logger        *utils.Logger
-	reporter      *report.Reporter
-	progBar       *output.ProgressBar
-	jobQueue      chan Job
-	jobsWg        sync.WaitGroup
-	workersWg     sync.WaitGroup
-	initialAddWg  sync.WaitGroup
-	requestCount atomic.Int64
+	config         *config.Config
+	client         *networking.Client
+	processor      *Processor
+	domainManager  *networking.DomainManager
+	logger         *utils.Logger
+	reporter       *report.Reporter
+	progBar        *output.ProgressBar
+	jobQueue       chan Job
+	jobsWg         sync.WaitGroup
+	producersWg    sync.WaitGroup
+	workersWg      sync.WaitGroup
+	initialAddWg   sync.WaitGroup
+	requestCount   atomic.Int64
 	stopRpsCounter chan bool
 }
 
@@ -84,11 +85,20 @@ func NewScheduler(
 	}
 }
 
-// addJob é o método central e seguro para adicionar um novo trabalho ao pipeline.
+// AddJob é o método síncrono para adicionar um novo trabalho ao pipeline.
 // Ele garante que o WaitGroup seja incrementado corretamente.
-func (s *Scheduler) addJob(job Job) {
+func (s *Scheduler) AddJob(job Job) {
 	s.jobsWg.Add(1)
 	s.jobQueue <- job
+}
+
+// AddJobAsync adiciona um job de forma assíncrona para evitar deadlocks.
+func (s *Scheduler) AddJobAsync(job Job) {
+	s.producersWg.Add(1)
+	go func() {
+		defer s.producersWg.Done()
+		s.AddJob(job)
+	}()
 }
 
 // requeueJob adiciona um trabalho de volta à fila sem incrementar o WaitGroup.
@@ -106,7 +116,7 @@ func (s *Scheduler) AddInitialTargets(targets []string) {
 		defer s.initialAddWg.Done()
 		for _, target := range targets {
 			if target != "" {
-				s.addJob(NewJob(target, FetchJS))
+				s.AddJob(NewJob(target, FetchJS))
 			}
 		}
 	}()
@@ -124,6 +134,7 @@ func (s *Scheduler) StartScan() {
 func (s *Scheduler) Wait() {
 	s.initialAddWg.Wait() // Espera a adição inicial de jobs terminar.
 	s.jobsWg.Wait()       // Espera todos os jobs (iniciais e subsequentes) serem processados.
+	s.producersWg.Wait()  // Espera todas as goroutines produtoras de jobs terminarem.
 	close(s.jobQueue)
 	s.workersWg.Wait()
 	s.stopRpsCounter <- true // Para o contador de RPS
@@ -235,14 +246,9 @@ func (s *Scheduler) processFetchJob(ctx context.Context, job Job) {
 		}
 	}
 
-	// Dispara uma nova goroutine para adicionar o próximo job.
-	// Isso evita um deadlock onde todos os workers podem ficar bloqueados
-	// tentando adicionar a uma fila cheia da qual eles mesmos deveriam estar consumindo.
-	go func() {
-		processJob := NewJob(job.SourceURL, ProcessJS)
-		processJob.Body = body
-		s.addJob(processJob)
-	}()
+	processJob := NewJob(job.SourceURL, ProcessJS)
+	processJob.Body = body
+	s.AddJobAsync(processJob)
 
 	s.handleJobSuccess(job.Input, "FetchJS")
 }

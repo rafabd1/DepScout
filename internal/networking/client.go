@@ -3,24 +3,22 @@ package networking
 import (
 	"context"
 	"crypto/tls"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 
-	"DepScout/internal/config"
 	"DepScout/internal/utils"
 )
 
 // Client is a wrapper around an HTTP client with connection pooling and proxy support.
 type Client struct {
-	config     *config.Config
-	logger     *utils.Logger
-	client     *http.Client
-	proxyPool  *ProxyPool
+	logger  *utils.Logger
+	client  *http.Client
+	headers []string
 }
 
 // RequestData holds data for an HTTP request.
@@ -40,13 +38,20 @@ type ResponseData struct {
 }
 
 // NewClient creates a new custom HTTP client.
-func NewClient(cfg *config.Config, logger *utils.Logger) (*Client, error) {
+func NewClient(
+	logger *utils.Logger,
+	timeout int,
+	insecureSkipVerify bool,
+	headers []string,
+	loadedProxies []*url.URL,
+) (*Client, error) {
+
 	transport := &http.Transport{
 		MaxIdleConns:        100,
 		MaxIdleConnsPerHost: 10,
 		IdleConnTimeout:     90 * time.Second,
 		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: cfg.InsecureSkipVerify,
+			InsecureSkipVerify: insecureSkipVerify,
 		},
 		DialContext: (&net.Dialer{
 			Timeout:   30 * time.Second,
@@ -54,23 +59,26 @@ func NewClient(cfg *config.Config, logger *utils.Logger) (*Client, error) {
 		}).DialContext,
 	}
 
-	client := &http.Client{
-		Transport: transport,
-		Timeout:   time.Duration(cfg.Timeout) * time.Second,
+	// Setup proxy rotation if proxies are available
+	if len(loadedProxies) > 0 {
+		var proxyCounter uint64
+		transport.Proxy = func(req *http.Request) (*url.URL, error) {
+			// Use atomic counter for thread-safe round-robin
+			count := atomic.AddUint64(&proxyCounter, 1) - 1
+			proxy := loadedProxies[count%uint64(len(loadedProxies))]
+			return proxy, nil
+		}
 	}
 
-	var proxyPool *ProxyPool
-	if cfg.ProxyFile != "" {
-		// This logic needs to be re-implemented if proxies are a priority.
-		// For now, it's disabled to simplify.
-		logger.Warnf("Proxy file specified, but proxy logic is currently simplified. Proxies will not be used.")
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   time.Duration(timeout) * time.Second,
 	}
 
 	return &Client{
-		config:     cfg,
-		logger:     logger,
-		client:     client,
-		proxyPool:  proxyPool,
+		logger:  logger,
+		client:  client,
+		headers: headers,
 	}, nil
 }
 
@@ -82,19 +90,21 @@ func (c *Client) Do(reqData RequestData) *ResponseData {
 	}
 
 	// Prepare headers
-	headers := make(map[string]string)
-	headers["User-Agent"] = "DepScout/1.0"
+	// Start with default User-Agent
+	req.Header.Set("User-Agent", "DepScout/1.0")
 
-	for _, h := range c.config.Headers {
+	// Apply headers from config
+	for _, h := range c.headers {
 		parts := strings.SplitN(h, ":", 2)
 		if len(parts) == 2 {
 			key := strings.TrimSpace(parts[0])
 			value := strings.TrimSpace(parts[1])
-			headers[key] = value
+			req.Header.Set(key, value)
 		}
 	}
 
-	for key, value := range headers {
+	// Apply request-specific headers, allowing overrides
+	for key, value := range reqData.Headers {
 		req.Header.Set(key, value)
 	}
 
@@ -110,31 +120,5 @@ func (c *Client) Do(reqData RequestData) *ResponseData {
 		StatusCode: resp.StatusCode,
 		Error:      nil,
 	}
-}
-
-// ProxyPool manages a pool of proxy URLs.
-type ProxyPool struct {
-	proxies []string
-	next    uint32
-	mu      sync.Mutex
-}
-
-// NewProxyPool creates a new ProxyPool.
-func NewProxyPool(proxies []string) *ProxyPool {
-	return &ProxyPool{
-		proxies: proxies,
-	}
-}
-
-// GetNextProxy cycles through the proxy list.
-func (p *ProxyPool) GetNextProxy() (string, error) {
-	if len(p.proxies) == 0 {
-		return "", fmt.Errorf("proxy pool is empty")
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	proxy := p.proxies[p.next%uint32(len(p.proxies))]
-	p.next++
-	return proxy, nil
 }
 

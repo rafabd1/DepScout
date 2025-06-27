@@ -70,7 +70,7 @@ func (p *Processor) processWithRegex(sourceURL string, body []byte) error {
 						SourceURL: sourceURL,
 						Type:      VerifyPackage,
 					}
-					p.scheduler.addJob(verifyJob)
+					p.scheduler.AddJobAsync(verifyJob)
 				}
 			}
 		}
@@ -106,6 +106,7 @@ func (p *Processor) traverseAST(node ast.Node, sourceURL string) {
 
 					p.processFoundPackage(packageName, sourceURL)
 				}
+
 			}
 		}
 	}
@@ -181,7 +182,7 @@ func (p *Processor) processFoundPackage(packageName, sourceURL string) {
 				SourceURL: sourceURL,
 				Type:      VerifyPackage,
 			}
-			p.scheduler.addJob(verifyJob)
+			p.scheduler.AddJobAsync(verifyJob)
 		}
 	}
 

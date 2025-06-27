@@ -57,6 +57,40 @@ func main() {
 		}
 	}
 
+	// --- Proxy Setup ---
+	var proxyStrings []string
+	if cfg.Proxy != "" {
+		proxyStrings = append(proxyStrings, cfg.Proxy)
+	}
+	if cfg.ProxyFile != "" {
+		fileProxies, err := networking.LoadProxiesFromFile(cfg.ProxyFile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error loading proxy file: %v\n", err)
+			os.Exit(1)
+		}
+		proxyStrings = append(proxyStrings, fileProxies...)
+	}
+
+	if len(proxyStrings) > 0 {
+		var parsedProxies []*url.URL
+		for _, pStr := range proxyStrings {
+			pURL, err := networking.ParseProxyURL(pStr)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: could not parse proxy '%s', skipping: %v\n", pStr, err)
+				continue
+			}
+			parsedProxies = append(parsedProxies, pURL)
+		}
+		
+		cfg.LoadedProxies = networking.CheckProxies(parsedProxies, cfg.Timeout, cfg.NoColor)
+
+		if len(cfg.LoadedProxies) == 0 {
+			fmt.Fprintf(os.Stderr, "Error: No live proxies found from the provided list. Aborting.\n")
+			os.Exit(1)
+		}
+	}
+	// --- End Proxy Setup ---
+
 	// Add files from directory to targets
 	if cfg.Directory != "" {
 		err := filepath.Walk(cfg.Directory, func(path string, info os.FileInfo, err error) error {
@@ -86,7 +120,13 @@ func main() {
 	
 	progBar := output.NewProgressBar(terminalController)
 	
-	client, err := networking.NewClient(cfg, logger)
+	client, err := networking.NewClient(
+		logger,
+		cfg.Timeout,
+		cfg.InsecureSkipVerify,
+		cfg.Headers,
+		cfg.LoadedProxies,
+	)
 	if err != nil {
 		logger.Fatalf("Failed to create networking client: %v", err)
 	}
@@ -157,8 +197,10 @@ func logInitialSettings(logger *utils.Logger, cfg *config.Config) {
 	if len(cfg.Headers) > 0 {
 		settings = append(settings, fmt.Sprintf("Custom Headers: %d", len(cfg.Headers)))
 	}
-	if cfg.ProxyFile != "" {
-		settings = append(settings, fmt.Sprintf("Proxy File: %s", cfg.ProxyFile))
+	if len(cfg.LoadedProxies) > 0 {
+		settings = append(settings, fmt.Sprintf("Using %d Live Proxies", len(cfg.LoadedProxies)))
+	} else if cfg.ProxyFile != "" || cfg.Proxy != "" {
+		settings = append(settings, "Proxy: None (check failed)")
 	}
 
 	logger.Infof("Settings: %s", strings.Join(settings, ", "))

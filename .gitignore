@@ -36,4 +36,5 @@ dev/
 *.log
 
 *.txt
+*.json
 CHECKLIST.md
