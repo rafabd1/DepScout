@@ -8,7 +8,6 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"DepScout/internal/config"
@@ -38,7 +37,6 @@ func (jt JobType) String() string {
 type Job struct {
 	Input      string
 	Type       JobType
-	Attempt    int
 	SourceURL  string
 	Body       []byte
 	BaseDomain string
@@ -50,29 +48,33 @@ type Scheduler struct {
 	client        *networking.Client
 	processor     *Processor
 	domainManager *networking.DomainManager
-	logger        utils.Logger
+	logger        *utils.Logger
 	reporter      *report.Reporter
+	progBar       *output.ProgressBar
 	jobQueue      chan Job
-	wg            sync.WaitGroup
-	activeJobs    atomic.Int32
-	ctx           context.Context
-	cancel        context.CancelFunc
-	progressBar   *output.ProgressBar
+	jobsWg        sync.WaitGroup
+	workersWg     sync.WaitGroup
 }
 
 // NewScheduler creates a new Scheduler instance.
-func NewScheduler(cfg *config.Config, client *networking.Client, processor *Processor, dm *networking.DomainManager, logger utils.Logger, reporter *report.Reporter) *Scheduler {
-	ctx, cancel := context.WithCancel(context.Background())
+func NewScheduler(
+	cfg *config.Config,
+	client *networking.Client,
+	processor *Processor,
+	domainManager *networking.DomainManager,
+	logger *utils.Logger,
+	reporter *report.Reporter,
+	progBar *output.ProgressBar,
+) *Scheduler {
 	return &Scheduler{
 		config:        cfg,
 		client:        client,
 		processor:     processor,
-		domainManager: dm,
+		domainManager: domainManager,
 		logger:        logger,
 		reporter:      reporter,
-		jobQueue:      make(chan Job, cfg.Concurrency),
-		ctx:           ctx,
-		cancel:        cancel,
+		progBar:       progBar,
+		jobQueue:      make(chan Job, cfg.Concurrency*2),
 	}
 }
 
@@ -80,53 +82,47 @@ func NewScheduler(cfg *config.Config, client *networking.Client, processor *Proc
 // Isso deve ser chamado antes de StartScan.
 func (s *Scheduler) AddInitialTargets(targets []string) {
 	for _, target := range targets {
-		s.addJob(NewJob(target, FetchJS))
+		if target != "" {
+			s.addJob(NewJob(target, FetchJS))
+		}
 	}
 }
 
 // StartScan begins the scanning process.
 func (s *Scheduler) StartScan() {
-	if s.activeJobs.Load() == 0 {
-		return
-	}
-	if !s.config.Silent {
-		s.progressBar = output.NewProgressBar(int(s.activeJobs.Load()), 40)
-		s.progressBar.Start()
-	}
+	s.workersWg.Add(s.config.Concurrency)
 	for i := 0; i < s.config.Concurrency; i++ {
-		s.wg.Add(1)
-		go s.worker(s.ctx, i+1)
-	}
-	s.wg.Wait()
-	if s.progressBar != nil {
-		s.progressBar.Stop()
+		go s.worker()
 	}
 }
 
-func (s *Scheduler) worker(ctx context.Context, id int) {
-	defer s.wg.Done()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case job, ok := <-s.jobQueue:
-			if !ok { return }
-			switch job.Type {
-			case FetchJS:
-				s.processFetchJob(ctx, job)
-			case ProcessJS:
-				s.processor.ProcessJSFileContent(job.SourceURL, job.Body)
-				s.handleJobSuccess(job.Input, "ProcessJS")
-			case VerifyPackage:
-				s.processVerifyPackageJob(ctx, job)
-			}
+func (s *Scheduler) Wait() {
+	s.jobsWg.Wait()
+	close(s.jobQueue)
+	s.workersWg.Wait()
+}
+
+func (s *Scheduler) worker() {
+	defer s.workersWg.Done()
+	for job := range s.jobQueue {
+		// Use a timeout for each job's context
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(s.config.Timeout)*time.Second)
+		switch job.Type {
+		case FetchJS:
+			s.processFetchJob(ctx, job)
+		case ProcessJS:
+			s.processor.ProcessJSFileContent(job.SourceURL, job.Body)
+			s.handleJobSuccess(job.Input, "ProcessJS")
+		case VerifyPackage:
+			s.processVerifyPackageJob(ctx, job)
 		}
+		cancel()
 	}
 }
 
 func (s *Scheduler) addJob(job Job) {
-	s.activeJobs.Add(1)
-	go func() { s.jobQueue <- job }()
+	s.jobsWg.Add(1)
+	s.jobQueue <- job
 }
 
 func (s *Scheduler) processFetchJob(ctx context.Context, job Job) {
@@ -148,19 +144,19 @@ func (s *Scheduler) processFetchJob(ctx context.Context, job Job) {
 			return
 		}
 		job.BaseDomain = u.Hostname()
-
 		s.domainManager.WaitForPermit(ctx, job.BaseDomain)
-
 		reqData := networking.RequestData{URL: job.Input, Method: "GET", Ctx: ctx}
 		respData := s.client.Do(reqData)
 		s.domainManager.RecordRequestResult(job.BaseDomain, respData.StatusCode, respData.Error)
-
 		if respData.Error != nil || respData.StatusCode >= 400 {
-			s.handleJobFailure(job, respData.Error)
+			err = respData.Error
+			if err == nil {
+				err = fmt.Errorf("HTTP status %d", respData.StatusCode)
+			}
+			s.handleJobFailure(job, err)
 			return
 		}
 		defer respData.Response.Body.Close()
-
 		body, err = io.ReadAll(respData.Response.Body)
 		if err != nil {
 			s.handleJobFailure(job, err)
@@ -168,23 +164,18 @@ func (s *Scheduler) processFetchJob(ctx context.Context, job Job) {
 		}
 	}
 
-	// Cria o job de processamento
 	processJob := NewJob(job.SourceURL, ProcessJS)
 	processJob.Body = body
 	s.addJob(processJob)
-
 	s.handleJobSuccess(job.Input, "FetchJS")
 }
 
 func (s *Scheduler) processVerifyPackageJob(ctx context.Context, job Job) {
 	packageName := job.Input
 	checkURL := "https://registry.npmjs.org/" + url.PathEscape(packageName)
-
 	reqData := networking.RequestData{URL: checkURL, Method: "HEAD", Ctx: ctx}
-	
 	s.logger.Debugf("Verifying package '%s' at %s", packageName, checkURL)
 	respData := s.client.Do(reqData)
-
 	if respData.Error != nil {
 		s.handleJobFailure(job, respData.Error)
 		return
@@ -202,55 +193,21 @@ func (s *Scheduler) processVerifyPackageJob(ctx context.Context, job Job) {
 	} else {
 		s.logger.Warnf("Unexpected status code %d for package '%s'", respData.StatusCode, packageName)
 	}
-
 	s.handleJobSuccess(packageName, "VerifyPackage")
 }
 
 func (s *Scheduler) handleJobSuccess(input, jobType string) {
+	s.progBar.Increment()
 	s.logger.Debugf("Job succeeded: %s (%s)", input, jobType)
-	s.handleJobCompletion()
+	s.jobsWg.Done()
 }
 
 func (s *Scheduler) handleJobFailure(job Job, err error) {
-	if job.Attempt >= s.config.MaxRetries+1 {
-		s.logger.Errorf("Job failed after %d attempts: %s. Error: %v", job.Attempt, job.Input, err)
-		s.handleJobCompletion()
-		return
-	}
-	
-	s.logger.Warnf("Job failed (attempt %d), retrying: %s", job.Attempt, job.Input)
-	job.Attempt++
-	time.Sleep(time.Duration(job.Attempt) * 2 * time.Second) // Backoff simples
-	s.addJob(job)
-	s.handleJobCompletion()
-}
-
-func (s *Scheduler) handleJobCompletion() {
-	if s.progressBar != nil {
-		s.progressBar.Increment()
-	}
-	if s.activeJobs.Add(-1) <= 0 {
-		s.shutdown()
-	}
-}
-
-func (s *Scheduler) shutdown() {
-	s.logger.Debugf("Scheduler shutting down...")
-	if !s.isChannelClosed(s.jobQueue) {
-		close(s.jobQueue)
-	}
-	s.cancel()
-}
-
-func (s *Scheduler) isChannelClosed(ch <-chan Job) bool {
-	select {
-	case _, ok := <-ch:
-		return !ok
-	default:
-		return false
-	}
+	s.progBar.Increment()
+	s.logger.Errorf("Job failed: %s (%s). Error: %v", job.Input, job.Type.String(), err)
+	s.jobsWg.Done()
 }
 
 func NewJob(input string, jobType JobType) Job {
-	return Job{Input: input, Type: jobType, Attempt: 1, SourceURL: input}
+	return Job{Input: input, SourceURL: input, Type: jobType}
 }

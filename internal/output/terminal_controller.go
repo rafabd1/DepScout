@@ -2,83 +2,49 @@ package output
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"sync"
 
-	"DepScout/internal/utils"
+	"github.com/morikuni/aec"
 )
 
-// TerminalController gerencia o acesso exclusivo à saída do terminal,
-// coordenando entre a barra de progresso e as mensagens de log.
+// TerminalController manages the terminal output, allowing for dynamic lines.
 type TerminalController struct {
-	mu              sync.Mutex
-	outputMu        sync.Mutex // Garante que apenas uma coisa (log ou barra) escreva por vez.
-	isTerminal      bool
-	activeProgressBar *ProgressBar // Referência direta para a barra de progresso ativa.
+	writer io.Writer
+	mu     sync.Mutex
 }
 
-var (
-	instance *TerminalController
-	once     sync.Once
-)
-
-// GetTerminalController retorna a instância singleton do TerminalController.
-func GetTerminalController() *TerminalController {
-	once.Do(func() {
-		instance = &TerminalController{
-			isTerminal: utils.IsTerminal(os.Stderr.Fd()),
-		}
-	})
-	return instance
-}
-
-// BeginOutput bloqueia a saída para uso exclusivo.
-func (tc *TerminalController) BeginOutput() {
-	tc.outputMu.Lock()
-}
-
-// EndOutput libera o bloqueio de saída.
-func (tc *TerminalController) EndOutput() {
-	tc.outputMu.Unlock()
-}
-
-// SetActiveProgressBar define ou limpa a barra de progresso ativa.
-func (tc *TerminalController) SetActiveProgressBar(pb *ProgressBar) {
-	tc.mu.Lock()
-	defer tc.mu.Unlock()
-	tc.activeProgressBar = pb
-}
-
-// GetActiveProgressBar retorna a barra de progresso atualmente ativa como uma interface.
-func (tc *TerminalController) GetActiveProgressBar() utils.ProgressBarInterface {
-	tc.mu.Lock()
-	defer tc.mu.Unlock()
-	if tc.activeProgressBar == nil {
-		return nil
-	}
-	return tc.activeProgressBar
-}
-
-// ClearLine limpa a linha atual do terminal, se for um terminal.
-func (tc *TerminalController) ClearLine() {
-	if tc.isTerminal {
-		fmt.Fprint(os.Stderr, "\033[2K\r")
+// NewTerminalController creates a new TerminalController.
+func NewTerminalController() *TerminalController {
+	return &TerminalController{
+		writer: os.Stderr,
 	}
 }
 
-// CoordinateOutput executa uma função com acesso exclusivo à saída do terminal.
-func (tc *TerminalController) CoordinateOutput(fn func()) {
-	tc.BeginOutput()
-	defer tc.EndOutput()
-
-	// O chamador (logger) agora é responsável por pausar/retomar a barra.
-	// Esta função apenas garante que a saída seja serializada.
-	fn()
+// Printf prints a formatted string to the managed writer.
+func (c *TerminalController) Printf(format string, a ...interface{}) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	fmt.Fprintf(c.writer, format, a...)
 }
 
-// IsTerminal retorna se o controlador está anexado a um terminal.
-func (tc *TerminalController) IsTerminal() bool {
-	tc.mu.Lock()
-	defer tc.mu.Unlock()
-	return tc.isTerminal
+// Println prints a line to the managed writer.
+func (c *TerminalController) Println(a ...interface{}) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	fmt.Fprintln(c.writer, a...)
+}
+
+// Overwritef clears the current line and prints a new formatted string.
+func (c *TerminalController) Overwritef(format string, a ...interface{}) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	// Constrói a sequência de controle para subir uma linha e limpar.
+	ansiSequence := aec.EmptyBuilder.Up(1).EraseLine(aec.EraseModes.All).ANSI
+	
+	// Aplica a sequência de controle à string formatada.
+	outputString := ansiSequence.Apply(fmt.Sprintf(format, a...))
+	
+	fmt.Fprint(c.writer, outputString)
 } 
