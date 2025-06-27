@@ -9,12 +9,12 @@ import (
 	"strings"
 	"time"
 
-	"DepScout/internal/config"
-	"DepScout/internal/core"
-	"DepScout/internal/networking"
-	"DepScout/internal/output"
-	"DepScout/internal/report"
-	"DepScout/internal/utils"
+	"github.com/rafabd1/DepScout/internal/config"
+	"github.com/rafabd1/DepScout/internal/core"
+	"github.com/rafabd1/DepScout/internal/networking"
+	"github.com/rafabd1/DepScout/internal/output"
+	"github.com/rafabd1/DepScout/internal/report"
+	"github.com/rafabd1/DepScout/internal/utils"
 )
 
 var version = "0.1.0" // Version is set during build time

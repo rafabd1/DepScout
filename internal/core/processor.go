@@ -5,8 +5,8 @@ import (
 	"strings"
 	"sync"
 
-	"DepScout/internal/config"
-	"DepScout/internal/utils"
+	"github.com/rafabd1/DepScout/internal/config"
+	"github.com/rafabd1/DepScout/internal/utils"
 
 	"github.com/dop251/goja/ast"
 	"github.com/dop251/goja/parser"

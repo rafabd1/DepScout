@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"DepScout/internal/config"
-	"DepScout/internal/utils"
+	"github.com/rafabd1/DepScout/internal/config"
+	"github.com/rafabd1/DepScout/internal/utils"
 
 	"golang.org/x/time/rate"
 )
