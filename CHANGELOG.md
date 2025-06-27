@@ -15,6 +15,6 @@ This is the first public release of **DepScout**.
 - **Advanced Configuration**: Provides a rich set of CLI flags for fine-grained control:
     - Concurrency levels (`-c`)
     - Request timeouts (`-t`) and custom headers (`-H`)
-    - File size limits (`--max-file-size`)
+    - File size limits (`-max-file-size`)
     - Proxy support (`-p`)
 - **Multiple Output Formats**: Delivers results in human-readable text or machine-readable `JSON` (`--json`), suitable for direct analysis or integration into other tools. 

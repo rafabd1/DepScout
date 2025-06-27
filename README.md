@@ -74,6 +74,11 @@ Scan a local directory of JS files using the high-accuracy deep scan mode:
 depscout -d /path/to/js/files --deep-scan
 ```
 
+Scan a list of targets from a file:
+```bash
+depscout -f targets.txt
+```
+
 ## Command Line Options
 
 | Flag | Description | Default |
@@ -86,6 +91,7 @@ depscout -d /path/to/js/files --deep-scan
 | `-H` | Custom header to include in all requests (can be specified multiple times). | - |
 | `-o` | File to write output to. | stdout |
 | `-p` | File containing a list of proxies (http/https/socks5). | - |
+| `-proxy` | A single proxy server (e.g. http://127.0.0.1:8080). | - |
 | `--deep-scan` | Enable deep scan using AST parsing (slower but more accurate). | `false` |
 | `-json` | Enable JSON output format. | `false` |
 | `--max-file-size` | Maximum file size to process in KB. | `10240` |
@@ -120,6 +126,6 @@ This project is licensed under the MIT License.
     <sub>Made with 🖤 by Rafael (github.com/rafabd1)</sub>
 </p>
 
-<p align="center">
+<!-- <p align="center">
     <a href="https://ko-fi.com/rafabd1" target="_blank"><img src="https://storage.ko-fi.com/cdn/kofi2.png?v=3" alt="Buy Me A Coffee" style="height: 60px !important;"></a>
-</p>
+</p> -->
