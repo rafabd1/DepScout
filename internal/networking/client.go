@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,7 +19,7 @@ import (
 type Client struct {
 	config     *config.Config
 	logger     *utils.Logger
-	httpClient *http.Client
+	client     *http.Client
 	proxyPool  *ProxyPool
 }
 
@@ -53,7 +54,7 @@ func NewClient(cfg *config.Config, logger *utils.Logger) (*Client, error) {
 		}).DialContext,
 	}
 
-	httpClient := &http.Client{
+	client := &http.Client{
 		Transport: transport,
 		Timeout:   time.Duration(cfg.Timeout) * time.Second,
 	}
@@ -68,25 +69,43 @@ func NewClient(cfg *config.Config, logger *utils.Logger) (*Client, error) {
 	return &Client{
 		config:     cfg,
 		logger:     logger,
-		httpClient: httpClient,
+		client:     client,
 		proxyPool:  proxyPool,
 	}, nil
 }
 
-// Do performs an HTTP request.
-func (c *Client) Do(reqData RequestData) ResponseData {
-	req, err := http.NewRequestWithContext(reqData.Ctx, reqData.Method, reqData.URL, reqData.Body)
+// Do executes an HTTP request.
+func (c *Client) Do(reqData RequestData) *ResponseData {
+	req, err := http.NewRequestWithContext(reqData.Ctx, reqData.Method, reqData.URL, nil)
 	if err != nil {
-		return ResponseData{Error: err}
-	}
-	req.Header.Set("User-Agent", "DepScout/1.0") // Set a default user agent
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return ResponseData{Error: err}
+		return &ResponseData{Error: err}
 	}
 
-	return ResponseData{
+	// Prepare headers
+	headers := make(map[string]string)
+	headers["User-Agent"] = "DepScout/1.0"
+
+	for _, h := range c.config.Headers {
+		parts := strings.SplitN(h, ":", 2)
+		if len(parts) == 2 {
+			key := strings.TrimSpace(parts[0])
+			value := strings.TrimSpace(parts[1])
+			headers[key] = value
+		}
+	}
+
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+
+	c.logger.Debugf("Requesting %s", req.URL.String())
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return &ResponseData{Error: err}
+	}
+
+	return &ResponseData{
 		Response:   resp,
 		StatusCode: resp.StatusCode,
 		Error:      nil,

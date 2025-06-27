@@ -14,6 +14,10 @@ type Config struct {
 	Directory          string
 	Concurrency        int
 	Timeout            int
+	RateLimit          int
+	MaxFileSize        int // in KB
+	NoLimit            bool
+	Headers            stringSlice
 	ProxyFile          string
 	OutputFile         string
 	Verbose            bool
@@ -36,6 +40,10 @@ func NewConfig() *Config {
 		Directory:          "",
 		Concurrency:        25,
 		Timeout:            10,
+		RateLimit:          5, // Default rate limit of 5 req/s
+		MaxFileSize:        10240, // Default 10MB max file size
+		NoLimit:            false,
+		Headers:            []string{},
 		ProxyFile:          "",
 		OutputFile:         "",
 		Verbose:            false,
@@ -52,26 +60,22 @@ func (c *Config) Parse() error {
 
 	var singleTarget string
 	fs.StringVar(&singleTarget, "u", "", "A single target URL or file path.")
-	fs.StringVar(&singleTarget, "url", "", "A single target URL or file path.")
 
 	var targetFile string
 	fs.StringVar(&targetFile, "f", "", "A file containing a list of targets (URLs or file paths).")
-	fs.StringVar(&targetFile, "file", "", "A file containing a list of targets (URLs or file paths).")
 
 	fs.StringVar(&c.Directory, "d", "", "Path to a local directory to scan for .js and .ts files.")
-	fs.StringVar(&c.Directory, "directory", "", "Path to a local directory to scan for .js and .ts files.")
 
 	fs.IntVar(&c.Concurrency, "c", 25, "Number of concurrent workers.")
-	fs.IntVar(&c.Concurrency, "concurrency", 25, "Number of concurrent workers.")
 	fs.IntVar(&c.Timeout, "t", 10, "Request timeout in seconds.")
-	fs.IntVar(&c.Timeout, "timeout", 10, "Request timeout in seconds.")
+	fs.IntVar(&c.RateLimit, "l", 5, "Maximum requests per second per domain.")
+	fs.IntVar(&c.MaxFileSize, "max-file-size", 10240, "Maximum file size to process in KB.")
+	fs.BoolVar(&c.NoLimit, "no-limit", false, "Disable file size limit.")
 	fs.StringVar(&c.ProxyFile, "p", "", "File containing a list of proxies (http/https/socks5).")
-	fs.StringVar(&c.ProxyFile, "proxy-file", "", "File containing a list of proxies (http/https/socks5).")
 	fs.StringVar(&c.OutputFile, "o", "", "File to write output to.")
-	fs.StringVar(&c.OutputFile, "output", "", "File to write output to.")
+	fs.Var(&c.Headers, "H", "Custom header to include in all requests (can be used multiple times).")
 
 	fs.BoolVar(&c.Verbose, "v", false, "Enable verbose output.")
-	fs.BoolVar(&c.Verbose, "verbose", false, "Enable verbose output.")
 	fs.BoolVar(&c.JsonOutput, "json", false, "Enable JSON output format.")
 	fs.BoolVar(&c.DeepScan, "deep-scan", false, "Enable deep scan using AST parsing (slower).")
 	fs.BoolVar(&c.InsecureSkipVerify, "skip-verify", false, "Skip TLS certificate verification.")
@@ -100,6 +104,8 @@ func (c *Config) Parse() error {
 			for scanner.Scan() {
 				c.Targets = append(c.Targets, strings.TrimSpace(scanner.Text()))
 			}
+		} else {
+			return flag.ErrHelp
 		}
 	}
 	
@@ -107,8 +113,8 @@ func (c *Config) Parse() error {
 		// Proxy parsing logic would go here if needed again
 	}
 
-	if len(c.Targets) == 0 && c.Directory == "" {
-		return fmt.Errorf("no targets provided. Use -u, -f, -d, or pipe from stdin")
+	if len(c.Targets) == 0 && c.Directory == "" && singleTarget == "" && targetFile == "" {
+		return flag.ErrHelp
 	}
 
 	return nil
@@ -128,4 +134,16 @@ func readLines(path string) ([]string, error) {
 		lines = append(lines, scanner.Text())
 	}
 	return lines, scanner.Err()
+}
+
+// stringSlice is a custom type for handling multiple string flags
+type stringSlice []string
+
+func (i *stringSlice) String() string {
+	return "my string representation"
+}
+
+func (i *stringSlice) Set(value string) error {
+	*i = append(*i, value)
+	return nil
 } 
