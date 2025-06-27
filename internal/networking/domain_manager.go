@@ -126,16 +126,18 @@ func (dm *DomainManager) RecordRequestResult(domain string, statusCode int, err 
 			}
 		}
 
-	case statusCode >= 200 && statusCode < 400:
-		// Aumenta a taxa aditivamente em caso de sucesso, apenas se não estiver em backoff.
-		if !bucket.inBackoff {
+	default:
+		// Aumenta a taxa para qualquer resposta que NÃO seja 429, apenas se não estiver em backoff
+		if !bucket.inBackoff && statusCode != 429 && err == nil {
 			newLimit := bucket.limiter.Limit() + 0.2
 			if newLimit > rate.Limit(dm.config.MaxRateLimit) { // Usa o teto máximo da config
 				newLimit = rate.Limit(dm.config.MaxRateLimit)
 			}
 			bucket.limiter.SetLimit(newLimit)
-			dm.logger.Debugf("[DomainManager] Success for '%s'. Rate limit increased to %.2f req/s.", domain, newLimit)
+			dm.logger.Debugf("[DomainManager] Non-429 response for '%s' (status: %d). Rate limit increased to %.2f req/s.", domain, statusCode, newLimit)
 		}
+		// Note: Não fazemos nada para erros de rede ou outros casos
+		// Apenas o 429 reduz a taxa, qualquer resposta válida (não-429) pode aumentar
 	}
 	return false
 }
