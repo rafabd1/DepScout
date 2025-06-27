@@ -14,7 +14,7 @@ type Config struct {
 	Directory          string
 	Concurrency        int
 	Timeout            int
-	RateLimit          int
+	MaxRateLimit       int
 	MaxFileSize        int // in KB
 	NoLimit            bool
 	Headers            stringSlice
@@ -40,7 +40,7 @@ func NewConfig() *Config {
 		Directory:          "",
 		Concurrency:        25,
 		Timeout:            10,
-		RateLimit:          5, // Default rate limit of 5 req/s
+		MaxRateLimit:       30, // Default max rate limit of 30 req/s
 		MaxFileSize:        10240, // Default 10MB max file size
 		NoLimit:            false,
 		Headers:            []string{},
@@ -68,7 +68,7 @@ func (c *Config) Parse() error {
 
 	fs.IntVar(&c.Concurrency, "c", 25, "Number of concurrent workers.")
 	fs.IntVar(&c.Timeout, "t", 10, "Request timeout in seconds.")
-	fs.IntVar(&c.RateLimit, "l", 5, "Maximum requests per second per domain.")
+	fs.IntVar(&c.MaxRateLimit, "l", 30, "Maximum requests per second per domain in auto-adjustment mode.")
 	fs.IntVar(&c.MaxFileSize, "max-file-size", 10240, "Maximum file size to process in KB.")
 	fs.BoolVar(&c.NoLimit, "no-limit", false, "Disable file size limit.")
 	fs.StringVar(&c.ProxyFile, "p", "", "File containing a list of proxies (http/https/socks5).")
