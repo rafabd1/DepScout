@@ -3,6 +3,7 @@ package input
 import (
 	"bufio"
 	"os"
+	"strings"
 )
 
 // Reader handles reading URLs from various sources like files or stdin.
@@ -26,7 +27,11 @@ func (r *Reader) ReadURLsFromFile(filePath string) ([]string, error) {
 	var urls []string
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
-		urls = append(urls, scanner.Text())
+		line := scanner.Text()
+		// Skip empty lines and comments
+		if len(line) > 0 && !strings.HasPrefix(line, "#") {
+			urls = append(urls, line)
+		}
 	}
 	return urls, scanner.Err()
 }

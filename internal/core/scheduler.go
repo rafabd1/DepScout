@@ -144,6 +144,8 @@ func (s *Scheduler) Wait() {
 	s.initialAddWg.Wait() // Espera a adição inicial de jobs terminar.
 	s.jobsWg.Wait()       // Espera todos os jobs (iniciais e subsequentes) serem processados.
 	s.producersWg.Wait()  // Espera todas as goroutines produtoras de jobs terminarem.
+	// Dê um pequeno tempo para jobs finais serem processados antes de fechar
+	time.Sleep(100 * time.Millisecond)
 	s.jobDistributor.Close()
 	s.workersWg.Wait()
 	s.stopRpsCounter <- true // Para o contador de RPS

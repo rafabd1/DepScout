@@ -10,45 +10,46 @@ import "regexp"
 
 /**
  * @description Compiles endpoint extraction patterns optimized for performance
+ * Patterns are highly specific to avoid JavaScript code false positives
  * @returns Array of compiled regex patterns for endpoint detection
  */
 func compileEndpointPatterns() []*regexp.Regexp {
 	patterns := []string{
-		// Standard REST API endpoints with path parameters
-		`["'\x60](/(?:[a-zA-Z0-9_\-]+/)*[a-zA-Z0-9_\-]*(?:\{[a-zA-Z0-9_]+\})?(?:/[a-zA-Z0-9_\-]*)*)["\x60']`,
+		// Fetch/axios URL patterns - strict context
+		`(?:fetch|axios(?:\.(?:get|post|put|delete|patch))?)\s*\(\s*["'\x60]([/](?:[a-zA-Z0-9_\-]+[/]?)*(?:\{[a-zA-Z0-9_]+\})?[/]?[a-zA-Z0-9_\-]*)["\x60']`,
 		
-		// Template literal endpoints with variables
-		`\x60(/[^/\x60]*(?:\$\{[^}]+\}[^/\x60]*)*/?[^/\x60]*)\x60`,
+		// XMLHttpRequest open calls - complete pattern
+		`\.open\s*\(\s*["'](?:GET|POST|PUT|DELETE|PATCH)["']\s*,\s*["'\x60]([/][a-zA-Z0-9_/\-\.]+)["\x60']`,
 		
-		// Fetch/axios URL patterns
-		`(?:fetch|axios(?:\.get|\.post|\.put|\.delete)?)\s*\(\s*["'\x60]([/][^"'\x60]*)["\x60']`,
+		// URL constructor with API paths
+		`new\s+URL\s*\(\s*["'\x60]([/](?:api|auth|admin|user)[a-zA-Z0-9_/\-]*)["\x60']`,
 		
-		// XMLHttpRequest open calls
-		`\.open\s*\(\s*["'][^"']*["']\s*,\s*["'\x60]([/][^"'\x60]*)["\x60']`,
+		// Route definitions (Express.js/server-side)
+		`\.(?:get|post|put|delete|patch)\s*\(\s*["'\x60]([/][a-zA-Z0-9_/\-:{}]+)["\x60']\s*,`,
 		
-		// API versioning patterns
-		`["'\x60](/(?:api|v\d+)(?:/[a-zA-Z0-9_\-]+)*)["\x60']`,
+		// API versioning patterns - specific
+		`["'\x60]([/](?:api|v[1-9])[/][a-zA-Z0-9_/\-]+)["\x60']`,
 		
-		// Route definitions (Express.js style)
-		`\.(?:get|post|put|delete|patch)\s*\(\s*["'\x60]([/][^"'\x60]*)["\x60']`,
-		
-		// URL constructor patterns
-		`new\s+URL\s*\(\s*["'\x60]([/][^"'\x60]*)["\x60']`,
-		
-		// Relative path patterns
-		`["'\x60](\./[a-zA-Z0-9_/\-\.]+)["\x60']`,
-		
-		// Common endpoint patterns in strings
-		`["'\x60](/admin[/a-zA-Z0-9_\-]*)["\x60']`,
-		`["'\x60](/api[/a-zA-Z0-9_\-]*)["\x60']`,
-		`["'\x60](/auth[/a-zA-Z0-9_\-]*)["\x60']`,
-		`["'\x60](/user[s]?[/a-zA-Z0-9_\-]*)["\x60']`,
+		// RESTful endpoints - common patterns
+		`["'\x60]([/](?:api|admin|auth|users?|posts?|products?|orders?)[/]?[a-zA-Z0-9_/\-]*)["\x60']`,
 		
 		// GraphQL endpoints
-		`["'\x60]([/]graphql[/]?)["\x60']`,
+		`["'\x60]([/]graphql(?:[/]v[1-9])?[/]?)["\x60']`,
 		
 		// WebSocket endpoints
-		`["'\x60]([/]ws[/a-zA-Z0-9_\-]*)["\x60']`,
+		`["'\x60]([/](?:ws|websocket|socket)[/]?[a-zA-Z0-9_\-]*)["\x60']`,
+		
+		// Action/form endpoints
+		`action\s*=\s*["'\x60]([/][a-zA-Z0-9_/\-\.]+)["\x60']`,
+		
+		// AJAX URL patterns with clear context
+		`\.(?:ajax|load|submit)\s*\([^)]*url\s*:\s*["'\x60]([/][a-zA-Z0-9_/\-\.]+)["\x60']`,
+		
+		// Configuration URL patterns
+		`(?:baseURL|endpoint|apiUrl)\s*[:=]\s*["'\x60]([/][a-zA-Z0-9_/\-\.]+)["\x60']`,
+		
+		// Template literals with simple variables (not complex expressions)
+		`\x60([/][a-zA-Z0-9_/\-]*\$\{[a-zA-Z0-9_]+\}[a-zA-Z0-9_/\-]*)\x60`,
 	}
 
 	return compilePatterns(patterns)
@@ -56,36 +57,35 @@ func compileEndpointPatterns() []*regexp.Regexp {
 
 /**
  * @description Compiles parameter extraction patterns for various contexts
+ * Patterns are highly specific to avoid false positives from JavaScript code
  * @returns Array of compiled regex patterns for parameter detection
  */
 func compileParameterPatterns() []*regexp.Regexp {
 	patterns := []string{
-		// URL query parameters
-		`[?&]([a-zA-Z0-9_]+)=`,
+		// 1. Explicit URL query parameters in strings (very specific)
+		`["'\x60][^"'\x60]*\?[^"'\x60]*[&]([a-zA-Z][a-zA-Z0-9_\-]{1,20})=[\w\-\.%]*["'\x60]`,
+		`["'\x60][^"'\x60]*\?([a-zA-Z][a-zA-Z0-9_\-]{1,20})=[\w\-\.%]*["'\x60]`,
 		
-		// Object property parameters (JSON-like)
-		`["'\x60]([a-zA-Z0-9_]+)["'\x60]\s*:\s*(?:["'\x60][^"'\x60]*["'\x60]|[^,}]+)`,
+		// 2. URLSearchParams constructor - explicit API context
+		`new\s+URLSearchParams\s*\(\s*\{[^}]*["'\x60]([a-zA-Z][a-zA-Z0-9_\-]{1,20})["'\x60']\s*:\s*[^}]*\}`,
 		
-		// Function parameter destructuring
-		`\{\s*([a-zA-Z0-9_]+)(?:\s*,\s*([a-zA-Z0-9_]+))*\s*\}`,
+		// 3. FormData append - very specific API calls
+		`\.append\s*\(\s*["'\x60]([a-zA-Z][a-zA-Z0-9_\-]{1,20})["'\x60']\s*,`,
 		
-		// Form field names
-		`name\s*=\s*["'\x60]([a-zA-Z0-9_]+)["'\x60']`,
+		// 4. Fetch/axios params - in HTTP request context
+		`(?:fetch|axios)\s*\([^,]*,\s*\{[^}]*(?:params|data)\s*:\s*\{[^}]*["'\x60]([a-zA-Z][a-zA-Z0-9_\-]{1,20})["'\x60']\s*:`,
 		
-		// Input field IDs
-		`id\s*=\s*["'\x60]([a-zA-Z0-9_]+)["'\x60']`,
+		// 5. HTML form inputs only
+		`<input[^>]+name\s*=\s*["'\x60]([a-zA-Z][a-zA-Z0-9_\-]{1,20})["'\x60']`,
 		
-		// Data attributes
-		`data-([a-zA-Z0-9_\-]+)`,
+		// 6. REST API path parameters - in URL context
+		`["'\x60][^"'\x60]*\/\{([a-zA-Z][a-zA-Z0-9_]{1,15})\}[^"'\x60]*["'\x60]`,
 		
-		// Parameter in template literals
-		`\$\{([a-zA-Z0-9_]+)\}`,
+		// 7. GraphQL variables - $ prefix in operation
+		`\$([a-zA-Z][a-zA-Z0-9_]{1,20}):\s*[A-Z]\w+[!\]?`,
 		
-		// Common parameter patterns
-		`\.get\s*\(\s*["'\x60]([a-zA-Z0-9_]+)["'\x60']`,
-		
-		// POST body parameters (simple detection)
-		`([a-zA-Z0-9_]+)\s*:\s*[a-zA-Z0-9_$.]+`,
+		// 8. Query parameters in actual URL strings
+		`(?:http|\/api|\/v\d)[^"'\x60]*[?&]([a-zA-Z][a-zA-Z0-9_\-]{1,20})=`,
 	}
 
 	return compilePatterns(patterns)

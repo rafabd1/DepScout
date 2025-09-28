@@ -195,6 +195,12 @@ func (re *RegexEngine) extractParameters(content string) []Parameter {
 		for _, match := range matches {
 			if len(match) > 1 {
 				paramName := match[1]
+				
+				// Validate parameter before including
+				if !re.looksLikeParameter(paramName) {
+					continue
+				}
+				
 				key := paramName + "_url" // Default to URL param
 				if seen[key] {
 					continue
@@ -459,24 +465,304 @@ func (re *RegexEngine) getContextWindow(content, match string, windowSize int) s
 }
 
 func (re *RegexEngine) looksLikeEndpoint(path string) bool {
-	if len(path) < 2 {
+	if len(path) < 2 || len(path) > 200 {
 		return false
 	}
 
-	// Must start with / or contain ://
-	if !strings.HasPrefix(path, "/") && !strings.Contains(path, "://") {
+	// Must start with / for API endpoints
+	if !strings.HasPrefix(path, "/") {
 		return false
 	}
 
-	// Skip obvious false positives
-	falsePaths := []string{"/", "//", "/css", "/js", "/img", "/images", "/static"}
-	for _, falseP := range falsePaths {
-		if path == falseP {
+	// Skip obvious false positives - static resources
+	staticPaths := []string{"/", "//", "/css", "/js", "/img", "/images", "/static", "/assets", "/public"}
+	for _, staticPath := range staticPaths {
+		if path == staticPath || strings.HasPrefix(path, staticPath+"/") {
 			return false
 		}
 	}
 
-	return true
+	// Skip JavaScript code patterns
+	codePatterns := []string{
+		"${", "\\", "/*", "*/", "//", "function", "return", "var ", "let ", "const ", 
+		"if(", "for(", "while(", ".map(", ".join(", ".replace(", ".split(",
+		"&&", "||", "===", "!==", "==", "!=", "++", "--",
+	}
+	for _, codePattern := range codePatterns {
+		if strings.Contains(path, codePattern) {
+			return false
+		}
+	}
+
+	// Skip paths with too many special characters or numbers
+	specialCount := 0
+	digitCount := 0
+	for _, char := range path {
+		if char == '{' || char == '}' || char == '$' || char == '(' || char == ')' || char == '[' || char == ']' {
+			specialCount++
+		}
+		if char >= '0' && char <= '9' {
+			digitCount++
+		}
+	}
+	
+	// Reject if too many special characters or mostly numbers
+	if specialCount > 3 || digitCount > len(path)/2 {
+		return false
+	}
+
+	// Must contain at least one letter for valid API paths
+	hasLetter := false
+	for _, char := range path {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') {
+			hasLetter = true
+			break
+		}
+	}
+	
+	if !hasLetter {
+		return false
+	}
+
+	// Validate API-like structure - should have reasonable segments
+	segments := strings.Split(path, "/")
+	if len(segments) > 10 { // Too many segments likely not an API
+		return false
+	}
+
+	// Check for common API patterns
+	for _, segment := range segments {
+		if segment == "api" || segment == "v1" || segment == "v2" || segment == "v3" || 
+		   segment == "auth" || segment == "admin" || segment == "users" || segment == "user" ||
+		   strings.HasPrefix(segment, "api") {
+			return true
+		}
+	}
+
+	// Allow simple RESTful patterns
+	if len(segments) >= 2 && len(segments) <= 6 {
+		return true
+	}
+
+	return false
+}
+
+func (re *RegexEngine) looksLikeParameter(param string) bool {
+	if len(param) < 2 || len(param) > 50 {
+		return false
+	}
+
+	// Basic validation - must contain letters and be reasonable length
+	if !re.hasValidCharacters(param) {
+		return false
+	}
+
+	// Use contextual analysis instead of blocklists
+	return re.looksLikeAPIParameter(param)
+}
+
+func (re *RegexEngine) hasValidCharacters(param string) bool {
+	// Must contain letters
+	hasLetter := false
+	
+	for _, char := range param {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') {
+			hasLetter = true
+		}
+		
+		// Only reject obvious code patterns that can't be parameters
+		if char == '{' || char == '}' || char == '(' || char == ')' || 
+		   char == '[' || char == ']' || char == '=' || char == '!' {
+			return false
+		}
+	}
+	
+	return hasLetter
+}
+
+func (re *RegexEngine) looksLikeAPIParameter(param string) bool {
+	paramLower := strings.ToLower(param)
+	
+	// 1. Semantic Analysis - API parameters follow specific patterns
+	if re.hasAPISemantics(paramLower) {
+		return true
+	}
+	
+	// 2. Structural Analysis - API naming conventions
+	if re.hasAPIStructure(param) {
+		return true
+	}
+	
+	// 3. Reject obvious function/method patterns
+	if re.looksLikeFunction(param) {
+		return false
+	}
+	
+	// 4. Reject object property patterns that aren't API-like
+	if re.looksLikeObjectProperty(param) {
+		return false
+	}
+	
+	// 5. Only accept very conservative API patterns
+	return re.passesStrictAPIHeuristics(param)
+}
+
+func (re *RegexEngine) hasAPISemantics(paramLower string) bool {
+	// Core API parameter concepts
+	apiConcepts := []string{
+		"id", "key", "token", "auth", "session", "csrf",
+		"user", "email", "password", "name", "title", 
+		"page", "limit", "offset", "sort", "order", "filter", "search", "query",
+		"category", "tag", "status", "type", "format", "version",
+		"date", "time", "created", "updated", "from", "to",
+		"price", "amount", "count", "total", "size",
+	}
+	
+	for _, concept := range apiConcepts {
+		if paramLower == concept || paramLower == concept+"s" ||
+		   strings.HasSuffix(paramLower, "_"+concept) || strings.HasSuffix(paramLower, concept+"_id") {
+			return true
+		}
+	}
+	
+	return false
+}
+
+func (re *RegexEngine) hasAPIStructure(param string) bool {
+	// Snake_case with API-like components
+	if strings.Contains(param, "_") {
+		parts := strings.Split(strings.ToLower(param), "_")
+		if len(parts) >= 2 {
+			// Check if parts contain API-like terms
+			for _, part := range parts {
+				if len(part) >= 2 && (part == "id" || part == "key" || part == "name" || 
+					part == "type" || part == "url" || part == "api" || part == "user") {
+					return true
+				}
+			}
+		}
+	}
+	
+	// CamelCase with specific API patterns (not function-like)
+	if !strings.Contains(param, "_") && param != strings.ToLower(param) {
+		// Should be noun-like, not verb-like for API parameters
+		if !re.startsWithVerb(strings.ToLower(param)) {
+			return len(param) >= 4 && len(param) <= 25
+		}
+	}
+	
+	return false
+}
+
+func (re *RegexEngine) looksLikeFunction(param string) bool {
+	paramLower := strings.ToLower(param)
+	
+	// Only reject very obvious function patterns
+	obviousFunctions := []string{"canParse", "canRead", "canWrite", "canDereference", 
+		"getData", "setData", "createElement", "addEventListener", "removeEventListener"}
+	
+	for _, fn := range obviousFunctions {
+		if strings.EqualFold(param, fn) {
+			return true
+		}
+	}
+	
+	// Reject camelCase that starts with obvious verbs and is long enough to be a function
+	if len(param) > 8 {
+		verbPrefixes := []string{"get", "set", "create", "update", "delete", "validate", "parse", "render", "handle"}
+		for _, verb := range verbPrefixes {
+			if strings.HasPrefix(paramLower, verb) && len(param) > len(verb) {
+				// Check if next char is uppercase (camelCase function pattern)
+				if param[len(verb)] >= 'A' && param[len(verb)] <= 'Z' {
+					return true
+				}
+			}
+		}
+	}
+	
+	return false
+}
+
+func (re *RegexEngine) looksLikeObjectProperty(param string) bool {
+	paramLower := strings.ToLower(param)
+	
+	// JSON Schema specific properties
+	jsonSchemaProps := []string{"schema", "vocabulary", "anchor", "dynamicanchor", "dynamicref", 
+		"definitions", "properties", "patternproperties", "additionalproperties"}
+	for _, prop := range jsonSchemaProps {
+		if paramLower == prop || strings.Contains(paramLower, prop) {
+			return true
+		}
+	}
+	
+	// React/Framework properties
+	frameworkProps := []string{"component", "element", "classname", "onclick", "onchange", 
+		"props", "state", "context", "provider", "consumer"}
+	for _, prop := range frameworkProps {
+		if paramLower == prop || strings.Contains(paramLower, prop) {
+			return true
+		}
+	}
+	
+	// General JavaScript object patterns
+	jsPatterns := []string{"typeof", "instanceof", "constructor", "prototype", "visitor", 
+		"iterator", "descriptor", "accessor", "invariant"}
+	for _, pattern := range jsPatterns {
+		if paramLower == pattern {
+			return true
+		}
+	}
+	
+	return false
+}
+
+func (re *RegexEngine) startsWithVerb(paramLower string) bool {
+	verbs := []string{"can", "is", "has", "get", "set", "add", "remove", "delete", 
+		"create", "update", "check", "validate", "parse", "render", "handle", "should", "will"}
+	
+	for _, verb := range verbs {
+		if strings.HasPrefix(paramLower, verb) {
+			return true
+		}
+	}
+	
+	return false
+}
+
+func (re *RegexEngine) passesStrictAPIHeuristics(param string) bool {
+	// Ultra-conservative - only accept parameters with high API confidence
+	paramLower := strings.ToLower(param)
+	
+	// Core API parameter names (very common in real APIs)
+	coreAPIParams := []string{"id", "key", "token", "auth", "user", "email", "page", 
+		"limit", "offset", "sort", "order", "search", "query", "filter", "type", "format", 
+		"category", "status", "name", "url", "code", "version"}
+	
+	for _, coreParam := range coreAPIParams {
+		if paramLower == coreParam {
+			return true
+		}
+	}
+	
+	// Parameters ending with API suffixes
+	if len(param) >= 4 && len(param) <= 20 {
+		if strings.HasSuffix(paramLower, "id") || strings.HasSuffix(paramLower, "key") ||
+		   strings.HasSuffix(paramLower, "url") || strings.HasSuffix(paramLower, "code") {
+			return true
+		}
+	}
+	
+	// Snake_case parameters (common in APIs)
+	if strings.Contains(param, "_") && len(param) >= 5 && len(param) <= 25 {
+		parts := strings.Split(paramLower, "_")
+		for _, part := range parts {
+			if part == "id" || part == "key" || part == "url" || part == "api" {
+				return true
+			}
+		}
+	}
+	
+	return false
 }
 
 func (re *RegexEngine) deduplicateStrings(strs []string) []string {

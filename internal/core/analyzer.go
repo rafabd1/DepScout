@@ -61,19 +61,28 @@ func (a *Analyzer) SetScheduler(s *Scheduler) {
  * @returns Error if processing fails completely
  */
 func (a *Analyzer) ProcessContent(sourceURL string, content []byte) error {
+	a.logger.Debugf("ProcessContent called for %s, content size: %d bytes", sourceURL, len(content))
+	
 	// Skip empty or very small content
 	if len(content) < 10 {
+		a.logger.Debugf("Skipping %s: content too small (%d bytes)", sourceURL, len(content))
 		return nil
 	}
 
 	// Check if already processed to avoid duplicates
 	contentHash := a.generateContentHash(content)
 	if _, exists := a.processed.LoadOrStore(contentHash, true); exists {
+		hashPrefix := contentHash
+		if len(contentHash) > 8 {
+			hashPrefix = contentHash[:8]
+		}
+		a.logger.Debugf("Skipping %s: already processed (hash: %s)", sourceURL, hashPrefix)
 		return nil // Silently skip duplicates
 	}
 
 	// Determine file type for appropriate processing
 	fileType := a.detectFileType(sourceURL, content)
+	a.logger.Debugf("Detected file type for %s: %v", sourceURL, fileType)
 	
 	// Multi-pass analysis approach
 	finding, err := a.processWithFallback(content, sourceURL, fileType)
@@ -84,8 +93,12 @@ func (a *Analyzer) ProcessContent(sourceURL string, content []byte) error {
 
 	// Skip if no useful data was extracted
 	if finding == nil || a.isEmpty(finding) {
+		a.logger.Debugf("No useful findings extracted from %s", sourceURL)
 		return nil // Silently skip empty results
 	}
+
+	a.logger.Debugf("Extracted findings from %s: endpoints=%d, parameters=%d, headers=%d", 
+		sourceURL, len(finding.Endpoints), len(finding.Parameters), len(finding.Headers))
 
 	// Add finding to scheduler for reporting
 	if a.scheduler != nil {
@@ -95,6 +108,8 @@ func (a *Analyzer) ProcessContent(sourceURL string, content []byte) error {
 			Finding:   finding,
 		}
 		a.scheduler.AddJobAsync(reportJob)
+	} else {
+		a.logger.Warnf("Scheduler is nil, cannot report finding for %s", sourceURL)
 	}
 
 	return nil
