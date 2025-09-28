@@ -141,14 +141,26 @@ func (s *Scheduler) StartScan() {
 }
 
 func (s *Scheduler) Wait() {
-	s.initialAddWg.Wait() // Espera a adição inicial de jobs terminar.
-	s.jobsWg.Wait()       // Espera todos os jobs (iniciais e subsequentes) serem processados.
-	s.producersWg.Wait()  // Espera todas as goroutines produtoras de jobs terminarem.
-	// Dê um pequeno tempo para jobs finais serem processados antes de fechar
+	// First wait for initial targets to be added
+	s.initialAddWg.Wait()
+	
+	// Wait for all producers (async job creators) to finish first
+	s.producersWg.Wait()
+	
+	// Then wait for all jobs to be processed
+	s.jobsWg.Wait()
+	
+	// Give a small buffer for any final processing
 	time.Sleep(100 * time.Millisecond)
+	
+	// Close job distributor to signal workers to stop
 	s.jobDistributor.Close()
+	
+	// Wait for all workers to finish
 	s.workersWg.Wait()
-	s.stopRpsCounter <- true // Para o contador de RPS
+	
+	// Stop RPS counter
+	s.stopRpsCounter <- true
 }
 
 func (s *Scheduler) worker() {

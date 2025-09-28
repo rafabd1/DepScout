@@ -73,13 +73,13 @@ Download pre-built binaries for your platform from the [releases page](https://g
 Extract endpoints from a single JavaScript file:
 
 ```bash
-harpy -u https://example.com/assets/app.js
+harpy -u https://example.com/assets/app.js -o results.txt
 ```
 
 Scan local JavaScript files:
 
 ```bash
-harpy -d /path/to/js/files
+harpy -d /path/to/js/files --json -o findings.json
 ```
 
 Scan from a list of targets and output as JSON:
@@ -88,7 +88,7 @@ Scan from a list of targets and output as JSON:
 harpy -f targets.txt --json -o results.json
 ```
 
-Extract with verbose output:
+Extract with debug output:
 
 ```bash
 harpy -u https://target.com/main.js -v
@@ -227,7 +227,6 @@ This tool is designed for security professionals, bug bounty hunters, and resear
 
 ## 📚 Documentation
 
-- [Architecture Overview](dev/HARPY-ARCHITECTURE.md) - Technical details and design decisions
 - [Changelog](CHANGELOG.md) - Version history and updates
 
 ## 🤝 Contributing
@@ -241,26 +240,11 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ---
 
 <p align="center">
-    <sub>Made with 🔍 for bug bounty hunters and security researchers</sub>
-</p>
-
-<p align="center">
     <sub>Created by Rafael (github.com/rafabd1)</sub>
 </p>
 
 
 
-### Bug Bounty Reconnaissance    <a href="https://ko-fi.com/rafabd1" target="_blank"><img src="https://storage.ko-fi.com/cdn/kofi2.png?v=3" alt="Buy Me A Coffee" style="height: 60px !important;"></a>
-
-```bash</p> -->
-
-# Quick scan for endpoints and parameters
-harpy -u https://target.com/app.js --enable-regex --enable-ast
-
-# Comprehensive directory scan with JSON output
-harpy -d ./js-files --enable-ast --json -o findings.json
-
-# Scan with custom headers and proxy
-harpy -f targets.txt -H "User-Agent: Harpy/1.0" --proxy http://127.0.0.1:8080
-```
-
+<p align="center">
+  <a href="https://ko-fi.com/rafabd1" target="_blank"><img src="https://storage.ko-fi.com/cdn/kofi2.png?v=3" alt="Buy Me A Coffee" style="height: 60px !important;"></a>
+</p>

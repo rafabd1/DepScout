@@ -112,6 +112,5 @@ jobs:
 
             - [README.md](https://github.com/rafabd1/Harpy/blob/main/README.md) - Complete usage guide
             - [CHANGELOG.md](https://github.com/rafabd1/Harpy/blob/main/CHANGELOG.md) - Version history  
-            - [Architecture](https://github.com/rafabd1/Harpy/blob/main/dev/HARPY-ARCHITECTURE.md) - Technical details
 
             **⚠️ Disclaimer**: For authorized security testing only. Users must have explicit permission to test targets.
