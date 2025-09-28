@@ -60,8 +60,8 @@ func NewConfig() *Config {
 		OutputFile:         "",
 		Verbose:            false,
 		JsonOutput:         false,
-		EnableAST:          true,  // Default enable AST analysis
-		EnableRegex:        true,  // Default enable regex analysis
+		EnableAST:          true,  // Always enable AST analysis in hybrid mode
+		EnableRegex:        true,  // Always enable regex analysis in hybrid mode
 		InsecureSkipVerify: false,
 		Silent:             false,
 		NoColor:            false,
@@ -69,9 +69,84 @@ func NewConfig() *Config {
 	}
 }
 
+// showHelp displays custom help message with banner
+func (c *Config) showHelp() {
+	banner := `
+    ██╗  ██╗ █████╗ ██████╗ ██████╗ ██╗   ██╗
+    ██║  ██║██╔══██╗██╔══██╗██╔══██╗╚██╗ ██╔╝
+    ███████║███████║██████╔╝██████╔╝ ╚████╔╝ 
+    ██╔══██║██╔══██║██╔══██╗██╔═══╝   ╚██╔╝  
+    ██║  ██║██║  ██║██║  ██║██║        ██║   
+    ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝        ╚═╝   
+`
+	
+	fmt.Printf("%s\n", banner)
+	fmt.Printf("\t\tEndpoint & Parameter Extraction Tool | v1.0.0 by github.com/rafabd1\n\n")
+	
+	fmt.Println("DESCRIPTION:")
+	fmt.Println("  Harpy is a high-performance web reconnaissance tool for extracting endpoints,")
+	fmt.Println("  parameters, and hidden assets from JavaScript files using hybrid analysis.")
+	fmt.Println()
+	
+	fmt.Println("USAGE:")
+	fmt.Printf("  harpy [flags]\n\n")
+	
+	fmt.Println("INPUT OPTIONS:")
+	fmt.Println("  -u string    Single target URL or file path")
+	fmt.Println("  -f string    File containing list of targets (one per line)")
+	fmt.Println("  -d string    Directory to scan for JavaScript/TypeScript/HTML/JSON files")
+	fmt.Println()
+	
+	fmt.Println("NETWORK OPTIONS:")
+	fmt.Println("  -c int       Number of concurrent workers (default 25)")
+	fmt.Println("  -t int       Request timeout in seconds (default 10)")
+	fmt.Println("  -l int       Max requests per second per domain (default 30)")
+	fmt.Println("  -H strings   Custom headers (can be used multiple times)")
+	fmt.Println("  --proxy      Single proxy server (e.g. http://127.0.0.1:8080)")
+	fmt.Println("  -p string    File containing proxy list")
+	fmt.Println("  --skip-verify Skip TLS certificate verification")
+	fmt.Println()
+	
+	fmt.Println("OUTPUT OPTIONS:")
+	fmt.Println("  -o string    Output file path (default: stdout)")
+	fmt.Println("  --json       Output results in JSON format")
+	fmt.Println("  -v           Enable verbose output")
+	fmt.Println("  --silent     Suppress all output except findings")
+	fmt.Println("  --no-color   Disable colored output")
+	fmt.Println()
+	
+	fmt.Println("FILE OPTIONS:")
+	fmt.Println("  --max-file-size int  Maximum file size to process in KB (default 10240)")
+	fmt.Println("  --no-limit           Disable file size restrictions")
+	fmt.Println()
+	
+	fmt.Println("EXAMPLES:")
+	fmt.Println("  # Extract endpoints from a single file")
+	fmt.Println("  harpy -u https://example.com/app.js")
+	fmt.Println()
+	fmt.Println("  # Scan local directory with JSON output")
+	fmt.Println("  harpy -d ./js-files --json -o results.json")
+	fmt.Println()
+	fmt.Println("  # Scan from list with custom headers")
+	fmt.Println("  harpy -f targets.txt -H \"User-Agent: Harpy/1.0\"")
+	fmt.Println()
+	fmt.Println("  # Pipe from other tools")
+	fmt.Println("  subfinder -d target.com | httpx | harpy")
+	fmt.Println()
+	
+	fmt.Println("NOTE:")
+	fmt.Println("  Harpy uses intelligent hybrid analysis (Regex + AST) with automatic")
+	fmt.Println("  fallbacks for optimal results. No manual mode configuration needed.")
+}
+
 // Parse populates the Config struct from command-line flags and input sources.
 func (c *Config) Parse() error {
 	fs := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
+	
+	// Set custom usage function
+	fs.Usage = func() {
+		c.showHelp()
+	}
 
 	var singleTarget string
 	fs.StringVar(&singleTarget, "u", "", "A single target URL or file path.")
@@ -95,8 +170,6 @@ func (c *Config) Parse() error {
 
 	fs.BoolVar(&c.Verbose, "v", false, "Enable verbose output for debugging.")
 	fs.BoolVar(&c.JsonOutput, "json", false, "Enable JSON output format.")
-	fs.BoolVar(&c.EnableAST, "ast", true, "Enable AST analysis for JavaScript files (recommended).")
-	fs.BoolVar(&c.EnableRegex, "regex", true, "Enable regex pattern matching (recommended).")
 	fs.BoolVar(&c.InsecureSkipVerify, "skip-verify", false, "Skip TLS certificate verification.")
 	fs.BoolVar(&c.Silent, "silent", false, "Suppress all output except for findings.")
 	fs.BoolVar(&c.NoColor, "no-color", false, "Disable colorized output.")
@@ -128,8 +201,6 @@ func (c *Config) Parse() error {
 					c.Targets = append(c.Targets, line)
 				}
 			}
-		} else if singleTarget == "" && targetFile == "" && c.Directory == "" {
-			return flag.ErrHelp
 		}
 	}
 
@@ -137,8 +208,10 @@ func (c *Config) Parse() error {
 		return fmt.Errorf("cannot use both -proxy and -p flags at the same time")
 	}
 
-	if len(c.Targets) == 0 && c.Directory == "" && singleTarget == "" && targetFile == "" {
-		return flag.ErrHelp
+	// Show help if no input provided
+	if len(c.Targets) == 0 && c.Directory == "" {
+		c.showHelp()
+		os.Exit(0)
 	}
 
 	return nil

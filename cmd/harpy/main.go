@@ -38,14 +38,12 @@ func main() {
 
 	if !cfg.Silent {
 		banner := `
-  _   _                        
- | | | |                       
- | |_| | __ _ _ __ _ __  _   _   
- |  _  |/ _` + "`" + ` | '__| '_ \| | | |  
- | | | | (_| | |  | |_) | |_| |  
- \_| |_/\__,_|_|  | .__/ \__, |  
-                  | |     __/ |  
-                  |_|    |___/   `
+    ██╗  ██╗ █████╗ ██████╗ ██████╗ ██╗   ██╗
+    ██║  ██║██╔══██╗██╔══██╗██╔══██╗╚██╗ ██╔╝
+    ███████║███████║██████╔╝██████╔╝ ╚████╔╝ 
+    ██╔══██║██╔══██║██╔══██╗██╔═══╝   ╚██╔╝  
+    ██║  ██║██║  ██║██║  ██║██║        ██║   
+    ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝        ╚═╝   `
 		
 		author := "github.com/rafabd1"
 		
@@ -193,15 +191,8 @@ func logInitialSettings(logger *utils.Logger, cfg *config.Config) {
 	} else {
 		settings = append(settings, fmt.Sprintf("File Size Limit: %d KB", cfg.MaxFileSize))
 	}
-	if cfg.EnableAST && cfg.EnableRegex {
-		settings = append(settings, "Analysis: Hybrid (Regex + AST)")
-	} else if cfg.EnableAST {
-		settings = append(settings, "Analysis: AST Only")
-	} else if cfg.EnableRegex {
-		settings = append(settings, "Analysis: Regex Only")
-	} else {
-		settings = append(settings, "Analysis: Minimal")
-	}
+	// Harpy always uses hybrid analysis with intelligent fallbacks
+	settings = append(settings, "Analysis: Hybrid (Regex + AST with Smart Fallbacks)")
 	if cfg.InsecureSkipVerify {
 		settings = append(settings, "TLS Verification: Disabled")
 	}
