@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rafabd1/DepScout/internal/networking"
+	"github.com/rafabd1/Harpy/internal/networking"
 )
 
 // JobDistributor manages intelligent distribution of jobs across domains

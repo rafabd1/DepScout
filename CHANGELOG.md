@@ -1,20 +1,28 @@
-# DepScout Changelog
+# Harpy Changelog
 
-## [0.1.0] - Initial Release
+## [1.0.0] - Initial Release - 2025-09-27
 
-This is the first public release of **DepScout**.
+This is the first release of **Harpy** - A high-performance web reconnaissance tool for extracting endpoints, parameters, and hidden assets from JavaScript files.
 
 ### Core Features
-- **Dependency Confusion Scanning**: Identifies potential Dependency Confusion vulnerabilities by scanning JavaScript files for package names and checking their existence on the public npm registry.
-- **Dual Parsing Engine**:
-  - **Regex Mode**: Fast, high-performance scanning using fine-tuned regular expressions to find `require()` and `import` statements.
-  - **Deep Scan Mode (`--deep-scan`)**: High-accuracy scanning using a full Abstract Syntax Tree (AST) parser to eliminate false positives from non-code contexts (e.g., comments). Includes an automatic fallback to regex if AST parsing fails.
-- **Concurrent Architecture**: Leverages a powerful, concurrent worker model to perform high-speed fetching and analysis of hundreds or thousands of files simultaneously.
-- **Adaptive Rate Limiting**: Features a smart, per-domain rate limiter that automatically adjusts request speeds based on server responses (e.g., `429 Too Many Requests`), maximizing speed without overwhelming targets.
-- **Flexible Input**: Accepts targets from single URLs (`-u`), files (`-f`), local directories (`-d`), or piped via `stdin`.
-- **Advanced Configuration**: Provides a rich set of CLI flags for fine-grained control:
-    - Concurrency levels (`-c`)
-    - Request timeouts (`-t`) and custom headers (`-H`)
-    - File size limits (`-max-file-size`)
-    - Proxy support (`-p`)
-- **Multiple Output Formats**: Delivers results in human-readable text or machine-readable `JSON` (`--json`), suitable for direct analysis or integration into other tools. 
+- **Advanced JavaScript Analysis**: Hybrid regex and AST-based parsing for accurate endpoint and parameter extraction from JavaScript files.
+- **Dual Analysis Modes**:
+  - **Regex Mode** (`--enable-regex`): Ultra-fast pattern matching for quick reconnaissance
+  - **AST Mode** (`--enable-ast`): Deep JavaScript parsing for comprehensive analysis with higher accuracy
+  - **Hybrid Mode**: Intelligent combination of both approaches for optimal results
+- **Intelligent Extraction**: Discovers:
+  - API endpoints and paths
+  - URL parameters and form fields  
+  - HTTP headers and authentication tokens
+  - Internal domains and subdomains
+  - Hidden admin panels and debug endpoints
+- **Concurrent Architecture**: High-speed processing with configurable worker pools (`-c` flag)
+- **Adaptive Rate Limiting**: Smart per-domain throttling (`-l` flag) that automatically adjusts to server responses
+- **Flexible Input Sources**: URLs (`-u`), files (`-f`), directories (`-d`), or stdin for seamless integration
+- **Professional Output**: Clean terminal output plus structured JSON (`--json`) for automation
+- **Advanced Configuration**:
+  - File size limits (`--max-file-size`, `--no-limit`)
+  - Custom headers (`-H`)
+  - Proxy support (`-p`, `--proxy`)
+  - TLS options (`--skip-verify`)
+  - Output control (`-v`, `--silent`, `--no-color`) 

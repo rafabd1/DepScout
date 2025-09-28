@@ -11,11 +11,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/rafabd1/DepScout/internal/config"
-	"github.com/rafabd1/DepScout/internal/networking"
-	"github.com/rafabd1/DepScout/internal/output"
-	"github.com/rafabd1/DepScout/internal/report"
-	"github.com/rafabd1/DepScout/internal/utils"
+	"github.com/rafabd1/Harpy/internal/config"
+	"github.com/rafabd1/Harpy/internal/networking"
+	"github.com/rafabd1/Harpy/internal/output"
+	"github.com/rafabd1/Harpy/internal/report"
+	"github.com/rafabd1/Harpy/internal/utils"
 )
 
 // JobType define o tipo de trabalho que um Job representa.
@@ -26,14 +26,12 @@ const (
 	FetchJS JobType = iota
 	// ProcessJS é um trabalho para processar o conteúdo de um arquivo JavaScript.
 	ProcessJS
-	// VerifyPackage é um novo tipo de job para verificar um pacote no registro npm.
-	VerifyPackage
 	// ReportFinding é um trabalho para reportar findings do Harpy
 	ReportFinding
 )
 
 func (jt JobType) String() string {
-	return [...]string{"FetchJS", "ProcessJS", "VerifyPackage", "ReportFinding"}[jt]
+	return [...]string{"FetchJS", "ProcessJS", "ReportFinding"}[jt]
 }
 
 // Job representa uma unidade de trabalho para os workers.
@@ -51,7 +49,7 @@ type Job struct {
 type Scheduler struct {
 	config         *config.Config
 	client         *networking.Client
-	processor      *Processor
+	analyzer       *Analyzer // Changed from processor to analyzer
 	domainManager  *networking.DomainManager
 	logger         *utils.Logger
 	reporter       *report.Reporter
@@ -69,7 +67,7 @@ type Scheduler struct {
 func NewScheduler(
 	cfg *config.Config,
 	client *networking.Client,
-	processor *Processor,
+	analyzer *Analyzer, // Changed from processor to analyzer
 	domainManager *networking.DomainManager,
 	logger *utils.Logger,
 	reporter *report.Reporter,
@@ -78,7 +76,7 @@ func NewScheduler(
 	return &Scheduler{
 		config:         cfg,
 		client:         client,
-		processor:      processor,
+		analyzer:       analyzer, // Changed from processor to analyzer
 		domainManager:  domainManager,
 		logger:         logger,
 		reporter:       reporter,
@@ -167,10 +165,10 @@ func (s *Scheduler) worker() {
 		case FetchJS:
 			s.processFetchJob(job)
 		case ProcessJS:
-			s.processor.ProcessJSFileContent(job.SourceURL, job.Body)
+			s.analyzer.ProcessContent(job.SourceURL, job.Body)
 			s.handleJobSuccess(job.Input, "ProcessJS")
-		case VerifyPackage:
-			s.processVerifyPackageJob(job)
+		case ReportFinding:
+			s.processReportFindingJob(job)
 		}
 		s.jobsWg.Done()
 	}
@@ -183,8 +181,6 @@ func (s *Scheduler) processFetchJob(job Job) {
 	maxBytes := int64(s.config.MaxFileSize * 1024)
 
 	if isLocalFile {
-		s.logger.Debugf("Reading local file: %s", job.Input)
-
 		if !s.config.NoLimit {
 			fileInfo, statErr := os.Stat(job.Input)
 			if statErr != nil {
@@ -277,37 +273,50 @@ func (s *Scheduler) processFetchJob(job Job) {
 	s.handleJobSuccess(job.Input, "FetchJS")
 }
 
-func (s *Scheduler) processVerifyPackageJob(job Job) {
-	packageName := job.Input
-	checkURL := "https://registry.npmjs.org/" + url.PathEscape(packageName)
-	
-	// Create timeout context specifically for HTTP request
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(s.config.Timeout)*time.Second)
-	defer cancel()
-	
-	reqData := networking.RequestData{URL: checkURL, Method: "HEAD", Ctx: ctx}
-	s.logger.Debugf("Verifying package '%s' at %s", packageName, checkURL)
-	s.requestCount.Add(1)
-	respData := s.client.Do(reqData)
-	if respData.Error != nil {
-		s.handleJobFailure(job, respData.Error)
-					return
-				}
-	defer respData.Response.Body.Close()
-
-	if respData.StatusCode == 404 {
-		s.logger.Successf("Unclaimed package found: '%s'", packageName)
-		s.reporter.AddFinding(report.Finding{
-			UnclaimedPackage: packageName,
-			FoundInSourceURL: job.SourceURL,
-		})
-	} else if respData.StatusCode == 200 {
-		s.logger.Debugf("Package '%s' is claimed.", packageName)
-		} else {
-		s.logger.Warnf("Unexpected status code %d for package '%s'", respData.StatusCode, packageName)
+// processReportFindingJob handles reporting of Harpy findings
+func (s *Scheduler) processReportFindingJob(job Job) {
+	if job.Finding == nil {
+		s.logger.Errorf("ReportFinding job has no finding data: %s", job.Input)
+		return
 	}
-	// Nota: VerifyPackage jobs não incrementam a barra de progresso
-	s.logger.Debugf("Job succeeded: %s (VerifyPackage)", packageName)
+	
+	// Convert core.Finding to report.HarpyFinding
+	finding := job.Finding
+	harpyFinding := report.HarpyFinding{
+		Source:     finding.Source.FilePath,
+		Domains:    finding.Domains,
+		Endpoints:  make([]report.EndpointFinding, len(finding.Endpoints)),
+		Parameters: make([]report.ParameterFinding, len(finding.Parameters)),
+		Headers:    make([]report.HeaderFinding, len(finding.Headers)),
+	}
+	
+	// Convert endpoints
+	for i, ep := range finding.Endpoints {
+		harpyFinding.Endpoints[i] = report.EndpointFinding{
+			Method:  ep.Method,
+			Path:    ep.Path,
+			Context: ep.Context,
+		}
+	}
+	
+	// Convert parameters
+	for i, param := range finding.Parameters {
+		harpyFinding.Parameters[i] = report.ParameterFinding{
+			Name:    param.Name,
+			Type:    param.Type.String(),
+			Context: param.Context,
+		}
+	}
+	
+	// Convert headers
+	for i, header := range finding.Headers {
+		harpyFinding.Headers[i] = report.HeaderFinding{
+			Name:    header.Name,
+			Context: header.Context,
+		}
+	}
+	
+	s.reporter.AddHarpyFinding(harpyFinding)
 }
 
 // handleJobSuccess incrementa a barra de progresso apenas para trabalhos FetchJS
@@ -315,7 +324,6 @@ func (s *Scheduler) handleJobSuccess(input, jobType string) {
 	if jobType == "FetchJS" {
 		s.progBar.Increment()
 	}
-	s.logger.Debugf("Job succeeded: %s (%s)", input, jobType)
 }
 
 // handleJobFailure incrementa a barra de progresso apenas para trabalhos FetchJS

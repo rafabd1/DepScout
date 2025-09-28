@@ -1,4 +1,4 @@
-name: Release DepScout
+name: Release Harpy
 
 on:
   push:
@@ -31,13 +31,13 @@ jobs:
       - name: Build for all platforms
         run: |
           # Build for Windows
-          GOOS=windows GOARCH=amd64 go build -ldflags "-X main.version=${{ env.VERSION }}" -o depscout-${{ env.VERSION }}-windows-amd64.exe ./cmd/depscout/
+          GOOS=windows GOARCH=amd64 go build -ldflags "-X main.version=${{ env.VERSION }}" -o harpy-${{ env.VERSION }}-windows-amd64.exe ./cmd/harpy/
           
           # Build for Linux
-          GOOS=linux GOARCH=amd64 go build -ldflags "-X main.version=${{ env.VERSION }}" -o depscout-${{ env.VERSION }}-linux-amd64 ./cmd/depscout/
+          GOOS=linux GOARCH=amd64 go build -ldflags "-X main.version=${{ env.VERSION }}" -o harpy-${{ env.VERSION }}-linux-amd64 ./cmd/harpy/
           
           # Build for macOS
-          GOOS=darwin GOARCH=amd64 go build -ldflags "-X main.version=${{ env.VERSION }}" -o depscout-${{ env.VERSION }}-darwin-amd64 ./cmd/depscout/
+          GOOS=darwin GOARCH=amd64 go build -ldflags "-X main.version=${{ env.VERSION }}" -o harpy-${{ env.VERSION }}-darwin-amd64 ./cmd/harpy/
 
       - name: Create Release
         id: create_release
@@ -45,28 +45,29 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          name: DepScout v${{ env.VERSION }}
+          name: Harpy v${{ env.VERSION }}
           draft: false
           prerelease: false
           files: |
-            depscout-${{ env.VERSION }}-windows-amd64.exe
-            depscout-${{ env.VERSION }}-linux-amd64
-            depscout-${{ env.VERSION }}-darwin-amd64
+            harpy-${{ env.VERSION }}-windows-amd64.exe
+            harpy-${{ env.VERSION }}-linux-amd64
+            harpy-${{ env.VERSION }}-darwin-amd64
           body: |
-            # DepScout v${{ env.VERSION }} - Initial Release
+            # Harpy v${{ env.VERSION }} - Initial Release
 
-            This is the first public release of **DepScout**, a high-performance, concurrent scanner for detecting Dependency Confusion vulnerabilities.
+            This is the first release of **Harpy**, a high-performance web reconnaissance tool for extracting endpoints, parameters, and hidden assets from JavaScript files.
 
             ## Core Features
-            - **Dependency Confusion Scanning**: Identifies potential Dependency Confusion vulnerabilities by scanning JavaScript files for package names and checking their existence on the public npm registry.
-            - **Dual Parsing Engine**:
-              - **Regex Mode**: Fast, high-performance scanning using fine-tuned regular expressions to find `require()` and `import` statements.
-              - **Deep Scan Mode (`--deep-scan`)**: High-accuracy scanning using a full Abstract Syntax Tree (AST) parser to eliminate false positives from non-code contexts (e.g., comments). Includes an automatic fallback to regex if AST parsing fails.
-            - **Concurrent Architecture**: Leverages a powerful, concurrent worker model to perform high-speed fetching and analysis of hundreds or thousands of files simultaneously.
-            - **Adaptive Rate Limiting**: Features a smart, per-domain rate limiter that automatically adjusts request speeds based on server responses (e.g., `429 Too Many Requests`), maximizing speed without overwhelming targets.
-            - **Flexible Input**: Accepts targets from single URLs (`-u`), files (`-f`), local directories (`-d`), or piped via `stdin`.
-            - **Advanced Configuration**: Provides a rich set of CLI flags for fine-grained control.
-            - **Multiple Output Formats**: Delivers results in human-readable text or machine-readable `JSON` (`--json`).
+            - **Advanced JavaScript Analysis**: Hybrid regex and AST-based parsing for accurate endpoint and parameter extraction.
+            - **Dual Analysis Modes**:
+              - **Regex Mode** (`--enable-regex`): Ultra-fast pattern matching for quick reconnaissance
+              - **AST Mode** (`--enable-ast`): Deep JavaScript parsing for comprehensive analysis with higher accuracy
+              - **Hybrid Mode**: Intelligent combination of both approaches for optimal results
+            - **Intelligent Extraction**: Discovers API endpoints, parameters, headers, domains, and hidden assets.
+            - **Concurrent Architecture**: High-speed processing with configurable worker pools for maximum efficiency.
+            - **Adaptive Rate Limiting**: Smart per-domain throttling that automatically adjusts to server responses.
+            - **Flexible Input Sources**: URLs, local files, directories, or stdin for seamless integration.
+            - **Professional Output**: Clean terminal output plus structured JSON for automation and toolchain integration.
 
             ## Installation
             
@@ -74,9 +75,9 @@ jobs:
             
             For Go users:
             ```
-            go install github.com/rafabd1/DepScout/cmd/depscout@latest
+            go install github.com/rafabd1/Harpy/cmd/harpy@latest
             ```
             
             ## Documentation
             
-            See the [README.md](https://github.com/rafabd1/DepScout/blob/main/README.md) for usage details.
+            See the [README.md](https://github.com/rafabd1/Harpy/blob/main/README.md) for usage details and examples.

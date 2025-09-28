@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rafabd1/DepScout/internal/output"
+	"github.com/rafabd1/Harpy/internal/output"
 
 	"github.com/morikuni/aec"
 )

@@ -21,7 +21,7 @@ func (i *stringSlice) Set(value string) error {
 	return nil
 }
 
-// Config holds all the configuration for the application.
+// Config holds all the configuration for the Harpy application.
 type Config struct {
 	Targets            []string
 	Directory          string
@@ -36,7 +36,8 @@ type Config struct {
 	OutputFile         string
 	Verbose            bool
 	JsonOutput         bool
-	DeepScan           bool
+	EnableAST          bool  // Changed from DeepScan to EnableAST
+	EnableRegex        bool  // New flag for regex analysis
 	InsecureSkipVerify bool
 	Silent             bool
 	NoColor            bool
@@ -59,7 +60,8 @@ func NewConfig() *Config {
 		OutputFile:         "",
 		Verbose:            false,
 		JsonOutput:         false,
-		DeepScan:           false,
+		EnableAST:          true,  // Default enable AST analysis
+		EnableRegex:        true,  // Default enable regex analysis
 		InsecureSkipVerify: false,
 		Silent:             false,
 		NoColor:            false,
@@ -91,9 +93,10 @@ func (c *Config) Parse() error {
 	fs.StringVar(&c.OutputFile, "o", "", "File to write output to.")
 	fs.Var(&c.Headers, "H", "Custom header to include in all requests (can be used multiple times).")
 
-	fs.BoolVar(&c.Verbose, "v", false, "Enable verbose output.")
+	fs.BoolVar(&c.Verbose, "v", false, "Enable verbose output for debugging.")
 	fs.BoolVar(&c.JsonOutput, "json", false, "Enable JSON output format.")
-	fs.BoolVar(&c.DeepScan, "deep-scan", false, "Enable deep scan using AST parsing (slower).")
+	fs.BoolVar(&c.EnableAST, "ast", true, "Enable AST analysis for JavaScript files (recommended).")
+	fs.BoolVar(&c.EnableRegex, "regex", true, "Enable regex pattern matching (recommended).")
 	fs.BoolVar(&c.InsecureSkipVerify, "skip-verify", false, "Skip TLS certificate verification.")
 	fs.BoolVar(&c.Silent, "silent", false, "Suppress all output except for findings.")
 	fs.BoolVar(&c.NoColor, "no-color", false, "Disable colorized output.")

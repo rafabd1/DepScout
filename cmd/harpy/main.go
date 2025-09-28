@@ -9,18 +9,19 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rafabd1/DepScout/internal/config"
-	"github.com/rafabd1/DepScout/internal/core"
-	"github.com/rafabd1/DepScout/internal/networking"
-	"github.com/rafabd1/DepScout/internal/output"
-	"github.com/rafabd1/DepScout/internal/report"
-	"github.com/rafabd1/DepScout/internal/utils"
+	"github.com/rafabd1/Harpy/internal/config"
+	"github.com/rafabd1/Harpy/internal/core"
+	"github.com/rafabd1/Harpy/internal/networking"
+	"github.com/rafabd1/Harpy/internal/output"
+	"github.com/rafabd1/Harpy/internal/report"
+	"github.com/rafabd1/Harpy/internal/utils"
 )
 
-var version = "0.1.0" // Version is set during build time
+var version = "1.0.0" // Harpy version
 
 const (
 	colorCyan   = "\033[36m"
+	colorGreen  = "\033[32m" 
 	colorReset  = "\033[0m"
 )
 
@@ -37,23 +38,23 @@ func main() {
 
 	if !cfg.Silent {
 		banner := `
-  _____             _____                 _   
- |  __ \           / ____|               | |  
- | |  | | ___ _ __| (___   ___ ___  _   _| |_ 
- | |  | |/ _ \ '_ \\___ \ / __/ _ \| | | | __|
- | |__| |  __/ |_) |___) | (_| (_) | |_| | |_ 
- |_____/ \___| .__/_____/ \___\___/ \__,_|\__|
-             | |                              
-             |_|                              `
+  _   _                        
+ | | | |                       
+ | |_| | __ _ _ __ _ __  _   _   
+ |  _  |/ _` + "`" + ` | '__| '_ \| | | |  
+ | | | | (_| | |  | |_) | |_| |  
+ \_| |_/\__,_|_|  | .__/ \__, |  
+                  | |     __/ |  
+                  |_|    |___/   `
 		
 		author := "github.com/rafabd1"
 		
 		if !cfg.NoColor {
 			fmt.Printf("%s%s%s\n", colorCyan, banner, colorReset)
-			fmt.Printf("%s\t\tUnclaimed Dependencies Scanner | v%s by %s%s\n\n", colorCyan, version, author, colorReset)
+			fmt.Printf("%s\t\tEndpoint & Parameter Extraction Tool | v%s by %s%s\n\n", colorGreen, version, author, colorReset)
 		} else {
 			fmt.Printf("%s\n", banner)
-			fmt.Printf("\t\tUnclaimed Dependencies Scanner | v%s by %s\n\n", version, author)
+			fmt.Printf("\t\tEndpoint & Parameter Extraction Tool | v%s by %s\n\n", version, author)
 		}
 	}
 
@@ -95,10 +96,14 @@ func main() {
 	if cfg.Directory != "" {
 		err := filepath.Walk(cfg.Directory, func(path string, info os.FileInfo, err error) error {
 			if err != nil { return err }
-			if !info.IsDir() && (strings.HasSuffix(strings.ToLower(info.Name()), ".js") || strings.HasSuffix(strings.ToLower(info.Name()), ".ts")) {
-				cfg.Targets = append(cfg.Targets, path)
-		}
-		return nil
+			// Extended file types for Harpy
+			if !info.IsDir() {
+				ext := strings.ToLower(filepath.Ext(info.Name()))
+				if ext == ".js" || ext == ".ts" || ext == ".html" || ext == ".json" {
+					cfg.Targets = append(cfg.Targets, path)
+				}
+			}
+			return nil
 		})
 
 		if err != nil {
@@ -116,7 +121,7 @@ func main() {
 	terminalController := output.NewTerminalController()
 	logger := utils.NewLogger(terminalController, cfg.Verbose)
 	
-	logger.Infof("DepScout starting...")
+	logger.Infof("Harpy starting...")
 	
 	progBar := output.NewProgressBar(terminalController)
 	
@@ -131,12 +136,12 @@ func main() {
 		logger.Fatalf("Failed to create networking client: %v", err)
 	}
 
-	processor := core.NewProcessor(cfg, logger)
+	analyzer := core.NewAnalyzer(cfg, logger) // Changed from processor to analyzer
 	domainManager := networking.NewDomainManager(cfg, logger)
 	reporter := report.NewReporter(cfg, logger)
-	scheduler := core.NewScheduler(cfg, client, processor, domainManager, logger, reporter, progBar)
+	scheduler := core.NewScheduler(cfg, client, analyzer, domainManager, logger, reporter, progBar) // Updated parameters
 
-	processor.SetScheduler(scheduler)
+	analyzer.SetScheduler(scheduler) // Changed from processor.SetScheduler
 	logger.SetProgressBar(progBar)
 
 	// Log initial statistics
@@ -175,7 +180,7 @@ func main() {
 
 	logger.Infof("Scan finished in %s.", time.Since(startTime).Round(time.Second))
 	if reporter.GetFindingsCount() == 0 {
-		logger.Infof("No unclaimed dependencies found.")
+		logger.Infof("No findings extracted.")
 	}
 }
 
@@ -188,8 +193,14 @@ func logInitialSettings(logger *utils.Logger, cfg *config.Config) {
 	} else {
 		settings = append(settings, fmt.Sprintf("File Size Limit: %d KB", cfg.MaxFileSize))
 	}
-	if cfg.DeepScan {
-		settings = append(settings, "Deep Scan: Enabled")
+	if cfg.EnableAST && cfg.EnableRegex {
+		settings = append(settings, "Analysis: Hybrid (Regex + AST)")
+	} else if cfg.EnableAST {
+		settings = append(settings, "Analysis: AST Only")
+	} else if cfg.EnableRegex {
+		settings = append(settings, "Analysis: Regex Only")
+	} else {
+		settings = append(settings, "Analysis: Minimal")
 	}
 	if cfg.InsecureSkipVerify {
 		settings = append(settings, "TLS Verification: Disabled")

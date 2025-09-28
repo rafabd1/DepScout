@@ -1,22 +1,18 @@
 package core
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 
-	"github.com/rafabd1/DepScout/internal/config"
-	"github.com/rafabd1/DepScout/internal/utils"
+	"github.com/rafabd1/Harpy/internal/config"
+	"github.com/rafabd1/Harpy/internal/utils"
 )
 
 /**
  * @description Hybrid Analysis Engine - Core component that combines regex and AST analysis
- * for int	finding := Finding{
-		Source: SourceInfo{
-			FilePath: sourceURL,
-			FileType: a.detectFileType(sourceURL, content).String(),
-		},
-	}nt endpoint and parameter extraction from web applications
-*/
+ * for intelligent endpoint and parameter extraction from web applications
+ */
 type Analyzer struct {
 	config        *config.Config
 	logger        *utils.Logger
@@ -73,11 +69,8 @@ func (a *Analyzer) ProcessContent(sourceURL string, content []byte) error {
 	// Check if already processed to avoid duplicates
 	contentHash := a.generateContentHash(content)
 	if _, exists := a.processed.LoadOrStore(contentHash, true); exists {
-		a.logger.Debugf("Content already processed, skipping: %s", sourceURL)
-		return nil
+		return nil // Silently skip duplicates
 	}
-
-	a.logger.Debugf("Processing content from %s (%d bytes)", sourceURL, len(content))
 
 	// Determine file type for appropriate processing
 	fileType := a.detectFileType(sourceURL, content)
@@ -85,14 +78,13 @@ func (a *Analyzer) ProcessContent(sourceURL string, content []byte) error {
 	// Multi-pass analysis approach
 	finding, err := a.processWithFallback(content, sourceURL, fileType)
 	if err != nil {
-		a.logger.Warnf("Failed to process %s: %v", sourceURL, err)
+		a.logger.Errorf("Failed to process %s: %v", sourceURL, err)
 		return err
 	}
 
 	// Skip if no useful data was extracted
 	if finding == nil || a.isEmpty(finding) {
-		a.logger.Debugf("No useful data extracted from %s", sourceURL)
-		return nil
+		return nil // Silently skip empty results
 	}
 
 	// Add finding to scheduler for reporting
@@ -104,9 +96,6 @@ func (a *Analyzer) ProcessContent(sourceURL string, content []byte) error {
 		}
 		a.scheduler.AddJobAsync(reportJob)
 	}
-
-	a.logger.Debugf("Successfully processed %s - found %d endpoints, %d parameters", 
-		sourceURL, len(finding.Endpoints), len(finding.Parameters))
 
 	return nil
 }
@@ -129,12 +118,11 @@ func (a *Analyzer) processWithFallback(content []byte, sourceURL string, fileTyp
 		result, err := strategy(content, sourceURL)
 		if err == nil && result != nil && !a.isEmpty(result) {
 			finding = result
-			a.logger.Debugf("Strategy %d succeeded for %s", i+1, sourceURL)
 			break
 		} else {
 			lastError = err
 			if err != nil {
-				a.logger.Debugf("Strategy %d failed for %s: %v", i+1, sourceURL, err)
+				a.logger.Debugf("Analysis strategy %d failed for %s: %v", i+1, sourceURL, err)
 			}
 		}
 	}
@@ -148,34 +136,51 @@ func (a *Analyzer) processWithFallback(content []byte, sourceURL string, fileTyp
 }
 
 /**
- * @description Selects appropriate extraction strategies based on file type
+ * @description Selects appropriate extraction strategies based on file type and config
  * @param fileType Detected file type
  * @returns Array of extraction strategy functions
  */
 func (a *Analyzer) selectStrategies(fileType FileType) []func([]byte, string) (*Finding, error) {
+	// Check configuration to determine which strategies to use
+	strategies := make([]func([]byte, string) (*Finding, error), 0)
+	
 	switch fileType {
 	case JavaScript, TypeScript:
-		return []func([]byte, string) (*Finding, error){
-			a.processWithHybridJS,     // Regex + AST for JS/TS
-			a.processWithRegexOnly,    // Fallback to regex only
-			a.processWithMinimalExtraction, // Last resort
+		// For JS/TS, use hybrid if both are enabled, otherwise use available method
+		if a.config.EnableRegex && a.config.EnableAST {
+			strategies = append(strategies, a.processWithHybridJS)
 		}
+		if a.config.EnableRegex {
+			strategies = append(strategies, a.processWithRegexOnly)
+		}
+		// Always have minimal extraction as last resort
+		strategies = append(strategies, a.processWithMinimalExtraction)
+		
 	case HTML:
-		return []func([]byte, string) (*Finding, error){
-			a.processWithHTMLAnalysis,  // Specialized HTML processing
-			a.processWithRegexOnly,     // Fallback
+		strategies = append(strategies, a.processWithHTMLAnalysis)
+		if a.config.EnableRegex {
+			strategies = append(strategies, a.processWithRegexOnly)
 		}
+		
 	case JSON:
-		return []func([]byte, string) (*Finding, error){
-			a.processWithJSONAnalysis,  // JSON structure analysis
-			a.processWithRegexOnly,     // Fallback
+		strategies = append(strategies, a.processWithJSONAnalysis)
+		if a.config.EnableRegex {
+			strategies = append(strategies, a.processWithRegexOnly)
 		}
+		
 	default:
-		return []func([]byte, string) (*Finding, error){
-			a.processWithRegexOnly,           // Generic regex processing
-			a.processWithMinimalExtraction,   // Minimal extraction
+		if a.config.EnableRegex {
+			strategies = append(strategies, a.processWithRegexOnly)
 		}
+		strategies = append(strategies, a.processWithMinimalExtraction)
 	}
+	
+	// Ensure we always have at least one strategy
+	if len(strategies) == 0 {
+		strategies = append(strategies, a.processWithMinimalExtraction)
+	}
+	
+	return strategies
 }
 
 /**
@@ -185,6 +190,11 @@ func (a *Analyzer) selectStrategies(fileType FileType) []func([]byte, string) (*
  * @returns Finding with extracted data
  */
 func (a *Analyzer) processWithHybridJS(content []byte, sourceURL string) (*Finding, error) {
+	// Ensure both regex and AST are enabled for hybrid processing
+	if !a.config.EnableRegex || !a.config.EnableAST {
+		return nil, fmt.Errorf("hybrid processing requires both regex and AST to be enabled")
+	}
+
 	// Pass 1: Fast regex extraction
 	regexFindings := a.regexEngine.ExtractAll(content, sourceURL)
 	if len(regexFindings) == 0 {
@@ -264,7 +274,7 @@ func (a *Analyzer) processWithMinimalExtraction(content []byte, sourceURL string
 	finding := &Finding{
 		Source: SourceInfo{
 			FilePath: sourceURL,
-			FileType: string(a.detectFileType(sourceURL, content)),
+			FileType: a.detectFileType(sourceURL, content).String(),
 		},
 	}
 
