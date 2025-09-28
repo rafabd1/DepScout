@@ -47,20 +47,21 @@ type Job struct {
 
 // Scheduler orchestrates the scanning process.
 type Scheduler struct {
-	config         *config.Config
-	client         *networking.Client
-	analyzer       *Analyzer // Changed from processor to analyzer
-	domainManager  *networking.DomainManager
-	logger         *utils.Logger
-	reporter       *report.Reporter
-	progBar        *output.ProgressBar
-	jobDistributor *JobDistributor
-	jobsWg         sync.WaitGroup
-	producersWg    sync.WaitGroup
-	workersWg      sync.WaitGroup
-	initialAddWg   sync.WaitGroup
-	requestCount   atomic.Int64
-	stopRpsCounter chan bool
+	config             *config.Config
+	client             *networking.Client
+	analyzer           *Analyzer // Changed from processor to analyzer
+	domainManager      *networking.DomainManager
+	logger             *utils.Logger
+	reporter           *report.Reporter
+	progBar            *output.ProgressBar
+	jobDistributor     *JobDistributor
+	jobsWg             sync.WaitGroup
+	producersWg        sync.WaitGroup
+	workersWg          sync.WaitGroup
+	initialAddWg       sync.WaitGroup
+	requestCount       atomic.Int64
+	stopRpsCounter     chan bool
+	waitingForShutdown atomic.Bool
 }
 
 // NewScheduler creates a new Scheduler instance.
@@ -88,32 +89,33 @@ func NewScheduler(
 
 // AddJob é o método síncrono para adicionar um novo trabalho ao pipeline.
 // Ele garante que o WaitGroup seja incrementado corretamente.
-func (s *Scheduler) AddJob(job Job) {
+func (s *Scheduler) AddJob(job Job) bool {
+	// Prevent jobs from being added after Wait() has started
+	if s.waitingForShutdown.Load() {
+		return false
+	}
 	s.jobsWg.Add(1)
 	err := s.jobDistributor.AddJob(job)
 	if err != nil {
 		s.logger.Errorf("Failed to add job to distributor: %v", err)
 		s.jobsWg.Done() // Decrement since job wasn't actually added
+		return false
 	}
+	return true
 }
 
 // AddJobAsync adiciona um job de forma assíncrona para evitar deadlocks.
-func (s *Scheduler) AddJobAsync(job Job) {
+func (s *Scheduler) AddJobAsync(job Job) bool {
+	// Prevent new goroutines from being created after Wait() has started
+	if s.waitingForShutdown.Load() {
+		return false
+	}
 	s.producersWg.Add(1)
 	go func() {
 		defer s.producersWg.Done()
-		s.AddJob(job)
+		s.AddJob(job) // AddJob já gerencia o WaitGroup internamente
 	}()
-}
-
-// requeueJob adiciona um trabalho de volta à fila sem incrementar o WaitGroup.
-// Usado para retries onde o trabalho original já foi contabilizado.
-func (s *Scheduler) requeueJob(job Job) {
-	err := s.jobDistributor.AddJob(job)
-	if err != nil {
-		s.logger.Errorf("Failed to requeue job: %v", err)
-		s.jobsWg.Done() // Complete the job since it can't be requeued
-	}
+	return true
 }
 
 // AddInitialTargets adiciona uma lista de alvos iniciais ao scheduler.
@@ -121,14 +123,14 @@ func (s *Scheduler) requeueJob(job Job) {
 // o que é o comportamento esperado, pois os workers já estarão processando.
 func (s *Scheduler) AddInitialTargets(targets []string) {
 	s.initialAddWg.Add(1)
-		go func() {
+	go func() {
 		defer s.initialAddWg.Done()
 		for _, target := range targets {
 			if target != "" {
 				s.AddJob(NewJob(target, FetchJS))
-				}
 			}
-		}()
+		}
+	}()
 }
 
 // StartScan begins the scanning process.
@@ -143,48 +145,60 @@ func (s *Scheduler) StartScan() {
 func (s *Scheduler) Wait() {
 	// First wait for initial targets to be added
 	s.initialAddWg.Wait()
-	
+
+	// Allow more time for jobs to be processed before signaling shutdown
+	time.Sleep(2 * time.Second)
+
+	// Signal that we're entering shutdown phase
+	s.waitingForShutdown.Store(true)
+
 	// Wait for all producers (async job creators) to finish first
 	s.producersWg.Wait()
-	
+
 	// Then wait for all jobs to be processed
 	s.jobsWg.Wait()
-	
-	// Give a small buffer for any final processing
-	time.Sleep(100 * time.Millisecond)
-	
+
 	// Close job distributor to signal workers to stop
 	s.jobDistributor.Close()
-	
+
 	// Wait for all workers to finish
 	s.workersWg.Wait()
-	
+
 	// Stop RPS counter
-	s.stopRpsCounter <- true
+	select {
+	case s.stopRpsCounter <- true:
+	case <-time.After(1 * time.Second):
+		s.logger.Warnf("Timeout stopping RPS counter")
+	}
 }
 
 func (s *Scheduler) worker() {
 	defer s.workersWg.Done()
 	workerID := int(s.requestCount.Load()) % s.config.Concurrency
-	
+
 	for {
 		job, ok := s.jobDistributor.GetNextJob(workerID)
 		if !ok {
 			// No more jobs available, worker can exit
 			break
 		}
-		
-		// Don't create timeout context here - each operation will create its own as needed
-		switch job.Type {
-		case FetchJS:
-			s.processFetchJob(job)
-		case ProcessJS:
-			s.analyzer.ProcessContent(job.SourceURL, job.Body)
-			s.handleJobSuccess(job.Input, "ProcessJS")
-		case ReportFinding:
-			s.processReportFindingJob(job)
-		}
+
+		// Process the job and ensure Done() is called exactly once
+		s.processJob(job)
 		s.jobsWg.Done()
+	}
+}
+
+// processJob handles different job types
+func (s *Scheduler) processJob(job Job) {
+	switch job.Type {
+	case FetchJS:
+		s.processFetchJob(job)
+	case ProcessJS:
+		s.analyzer.ProcessContent(job.SourceURL, job.Body)
+		s.handleJobSuccess(job.Input, "ProcessJS")
+	case ReportFinding:
+		s.processReportFindingJob(job)
 	}
 }
 
@@ -199,40 +213,40 @@ func (s *Scheduler) processFetchJob(job Job) {
 			fileInfo, statErr := os.Stat(job.Input)
 			if statErr != nil {
 				s.handleJobFailure(job, fmt.Errorf("failed to stat local file: %w", statErr))
-		return
-	}
+				return
+			}
 			if fileInfo.Size() > maxBytes {
 				s.logger.Warnf("Skipping local file %s, size (%d KB) exceeds limit (%d KB)", job.Input, fileInfo.Size()/1024, s.config.MaxFileSize)
 				s.handleJobFailure(job, fmt.Errorf("file size exceeds limit"))
-		return
-	}
+				return
+			}
 		}
 
 		body, err = os.ReadFile(job.Input)
 		if err != nil {
 			s.handleJobFailure(job, fmt.Errorf("failed to read local file: %w", err))
-		return
-	}
-			} else {
+			return
+		}
+	} else {
 		u, parseErr := url.Parse(job.Input)
 		if parseErr != nil {
 			s.handleJobFailure(job, parseErr)
-		return
-	}
+			return
+		}
 		job.BaseDomain = u.Hostname()
 
 		// Wait for rate limiting permit without timeout - prevents unnecessary job failures
 		if err := s.domainManager.WaitForPermit(context.Background(), job.BaseDomain); err != nil {
 			s.handleJobFailure(job, err)
-		return
-	}
+			return
+		}
 
 		s.requestCount.Add(1)
-		
+
 		// Create timeout context specifically for HTTP request
 		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(s.config.Timeout)*time.Second)
 		defer cancel()
-		
+
 		reqData := networking.RequestData{URL: job.Input, Method: "GET", Ctx: ctx}
 		respData := s.client.Do(reqData)
 		justDiscarded := s.domainManager.RecordRequestResult(job.BaseDomain, respData.StatusCode, respData.Error)
@@ -241,18 +255,24 @@ func (s *Scheduler) processFetchJob(job Job) {
 			s.logger.PublicWarnf("Domain '%s' has been discarded due to excessive 429 responses. All subsequent requests to this domain will be ignored.", job.BaseDomain)
 		}
 
-		// Se recebermos um 429, reenfileiramos o job para uma nova tentativa, se o limite não foi atingido.
+		// Se recebermos um 429, tentamos fazer retry se o limite não foi atingido
 		if respData.StatusCode == 429 {
 			if job.Retries < 3 { // Limite de 3 retries por job
 				job.Retries++
-				s.logger.Warnf("Re-queueing job for %s due to 429. Attempt %d.", job.Input, job.Retries)
-				s.requeueJob(job) // Usa requeueJob para não incrementar o WaitGroup novamente
-	} else {
-				s.logger.Errorf("Job for %s failed after %d retries due to 429.", job.Input, job.Retries)
-				s.handleJobFailure(job, fmt.Errorf("HTTP status 429 after max retries"))
+				s.logger.Warnf("Retrying job for %s due to 429. Attempt %d.", job.Input, job.Retries)
+
+				// Add retry job asynchronously to avoid blocking and potential deadlocks
+				if s.AddJobAsync(job) {
+					// Mark this attempt as successful since we queued a retry
+					s.handleJobSuccess(job.Input, "FetchJS")
+					return
+				}
+				// If we can't add retry (shutdown in progress), treat as failure
 			}
-				return
-			}
+			s.logger.Errorf("Job for %s failed after %d retries due to 429.", job.Input, job.Retries)
+			s.handleJobFailure(job, fmt.Errorf("HTTP status 429 after max retries"))
+			return
+		}
 
 		if respData.Error != nil || respData.StatusCode >= 400 {
 			err = respData.Error
@@ -260,8 +280,8 @@ func (s *Scheduler) processFetchJob(job Job) {
 				err = fmt.Errorf("HTTP status %d", respData.StatusCode)
 			}
 			s.handleJobFailure(job, err)
-				return
-			}
+			return
+		}
 		defer respData.Response.Body.Close()
 
 		var limitedReader io.Reader = respData.Response.Body
@@ -272,19 +292,27 @@ func (s *Scheduler) processFetchJob(job Job) {
 
 		if err != nil {
 			s.handleJobFailure(job, err)
-					return
-				}
+			return
+		}
 		if !s.config.NoLimit && int64(len(body)) == maxBytes {
 			s.logger.Warnf("File at %s may have been truncated as it reached the size limit of %d KB", job.Input, s.config.MaxFileSize)
 		}
 	}
 
+	// Create ProcessJS job and add it to the queue
 	processJob := NewJob(job.Input, ProcessJS)
 	processJob.SourceURL = job.Input
 	processJob.Body = body
-	s.AddJobAsync(processJob)
 
-	s.handleJobSuccess(job.Input, "FetchJS")
+	// Add ProcessJS job asynchronously to avoid blocking
+	if s.AddJobAsync(processJob) {
+		// Mark FetchJS job as successful only if ProcessJS was queued
+		s.handleJobSuccess(job.Input, "FetchJS")
+	} else {
+		// If we can't queue ProcessJS (shutdown in progress), still mark as success
+		// since we successfully fetched the content
+		s.handleJobSuccess(job.Input, "FetchJS")
+	}
 }
 
 // processReportFindingJob handles reporting of Harpy findings
@@ -293,7 +321,7 @@ func (s *Scheduler) processReportFindingJob(job Job) {
 		s.logger.Errorf("ReportFinding job has no finding data: %s", job.Input)
 		return
 	}
-	
+
 	// Convert core.Finding to report.HarpyFinding
 	finding := job.Finding
 	harpyFinding := report.HarpyFinding{
@@ -303,7 +331,7 @@ func (s *Scheduler) processReportFindingJob(job Job) {
 		Parameters: make([]report.ParameterFinding, len(finding.Parameters)),
 		Headers:    make([]report.HeaderFinding, len(finding.Headers)),
 	}
-	
+
 	// Convert endpoints
 	for i, ep := range finding.Endpoints {
 		harpyFinding.Endpoints[i] = report.EndpointFinding{
@@ -312,7 +340,7 @@ func (s *Scheduler) processReportFindingJob(job Job) {
 			Context: ep.Context,
 		}
 	}
-	
+
 	// Convert parameters
 	for i, param := range finding.Parameters {
 		harpyFinding.Parameters[i] = report.ParameterFinding{
@@ -321,7 +349,7 @@ func (s *Scheduler) processReportFindingJob(job Job) {
 			Context: param.Context,
 		}
 	}
-	
+
 	// Convert headers
 	for i, header := range finding.Headers {
 		harpyFinding.Headers[i] = report.HeaderFinding{
@@ -329,7 +357,7 @@ func (s *Scheduler) processReportFindingJob(job Job) {
 			Context: header.Context,
 		}
 	}
-	
+
 	s.reporter.AddHarpyFinding(harpyFinding)
 }
 
@@ -360,9 +388,9 @@ func (s *Scheduler) startRpsCounter() {
 		lastTime := time.Now()
 
 		for {
-	select {
+			select {
 			case <-s.stopRpsCounter:
-		return
+				return
 			case <-ticker.C:
 				currentCount := s.requestCount.Load()
 				currentTime := time.Now()

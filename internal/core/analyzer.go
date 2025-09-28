@@ -1,11 +1,14 @@
 package core
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"sync"
 
 	"github.com/rafabd1/Harpy/internal/config"
+	"github.com/rafabd1/Harpy/internal/report"
 	"github.com/rafabd1/Harpy/internal/utils"
 )
 
@@ -61,29 +64,20 @@ func (a *Analyzer) SetScheduler(s *Scheduler) {
  * @returns Error if processing fails completely
  */
 func (a *Analyzer) ProcessContent(sourceURL string, content []byte) error {
-	a.logger.Debugf("ProcessContent called for %s, content size: %d bytes", sourceURL, len(content))
-	
 	// Skip empty or very small content
 	if len(content) < 10 {
-		a.logger.Debugf("Skipping %s: content too small (%d bytes)", sourceURL, len(content))
 		return nil
 	}
 
 	// Check if already processed to avoid duplicates
 	contentHash := a.generateContentHash(content)
 	if _, exists := a.processed.LoadOrStore(contentHash, true); exists {
-		hashPrefix := contentHash
-		if len(contentHash) > 8 {
-			hashPrefix = contentHash[:8]
-		}
-		a.logger.Debugf("Skipping %s: already processed (hash: %s)", sourceURL, hashPrefix)
 		return nil // Silently skip duplicates
 	}
 
 	// Determine file type for appropriate processing
 	fileType := a.detectFileType(sourceURL, content)
-	a.logger.Debugf("Detected file type for %s: %v", sourceURL, fileType)
-	
+
 	// Multi-pass analysis approach
 	finding, err := a.processWithFallback(content, sourceURL, fileType)
 	if err != nil {
@@ -97,22 +91,68 @@ func (a *Analyzer) ProcessContent(sourceURL string, content []byte) error {
 		return nil // Silently skip empty results
 	}
 
-	a.logger.Debugf("Extracted findings from %s: endpoints=%d, parameters=%d, headers=%d", 
-		sourceURL, len(finding.Endpoints), len(finding.Parameters), len(finding.Headers))
-
 	// Add finding to scheduler for reporting
 	if a.scheduler != nil {
 		reportJob := Job{
-			Input:     sourceURL,
-			Type:      ReportFinding,
-			Finding:   finding,
+			Input:   sourceURL,
+			Type:    ReportFinding,
+			Finding: finding,
 		}
-		a.scheduler.AddJobAsync(reportJob)
+		if !a.scheduler.AddJobAsync(reportJob) {
+			a.logger.Debugf("Could not queue reporting job for %s, adding directly to reporter", sourceURL)
+			// Fallback: add directly to reporter if scheduler is shutting down
+			a.addFindingDirectly(finding)
+		}
 	} else {
-		a.logger.Warnf("Scheduler is nil, cannot report finding for %s", sourceURL)
+		a.logger.Warnf("Scheduler is nil, adding finding directly to reporter for %s", sourceURL)
+		a.addFindingDirectly(finding)
 	}
 
 	return nil
+}
+
+// addFindingDirectly adds finding directly to reporter when scheduler is unavailable
+func (a *Analyzer) addFindingDirectly(finding *Finding) {
+	if a.scheduler == nil || a.scheduler.reporter == nil {
+		return
+	}
+
+	// Convert core.Finding to report.HarpyFinding
+	harpyFinding := report.HarpyFinding{
+		Source:     finding.Source.FilePath,
+		Domains:    finding.Domains,
+		Endpoints:  make([]report.EndpointFinding, len(finding.Endpoints)),
+		Parameters: make([]report.ParameterFinding, len(finding.Parameters)),
+		Headers:    make([]report.HeaderFinding, len(finding.Headers)),
+	}
+
+	// Convert endpoints
+	for i, ep := range finding.Endpoints {
+		harpyFinding.Endpoints[i] = report.EndpointFinding{
+			Method:  ep.Method,
+			Path:    ep.Path,
+			Context: ep.Context,
+		}
+	}
+
+	// Convert parameters
+	for i, param := range finding.Parameters {
+		harpyFinding.Parameters[i] = report.ParameterFinding{
+			Name:    param.Name,
+			Type:    param.Type.String(),
+			Context: param.Context,
+		}
+	}
+
+	// Convert headers
+	for i, header := range finding.Headers {
+		harpyFinding.Headers[i] = report.HeaderFinding{
+			Name:    header.Name,
+			Context: header.Context,
+		}
+	}
+
+	a.scheduler.reporter.AddHarpyFinding(harpyFinding)
 }
 
 /**
@@ -158,7 +198,7 @@ func (a *Analyzer) processWithFallback(content []byte, sourceURL string, fileTyp
 func (a *Analyzer) selectStrategies(fileType FileType) []func([]byte, string) (*Finding, error) {
 	// Check configuration to determine which strategies to use
 	strategies := make([]func([]byte, string) (*Finding, error), 0)
-	
+
 	switch fileType {
 	case JavaScript, TypeScript:
 		// For JS/TS, use hybrid if both are enabled, otherwise use available method
@@ -170,31 +210,37 @@ func (a *Analyzer) selectStrategies(fileType FileType) []func([]byte, string) (*
 		}
 		// Always have minimal extraction as last resort
 		strategies = append(strategies, a.processWithMinimalExtraction)
-		
+
 	case HTML:
 		strategies = append(strategies, a.processWithHTMLAnalysis)
 		if a.config.EnableRegex {
 			strategies = append(strategies, a.processWithRegexOnly)
 		}
-		
+
 	case JSON:
 		strategies = append(strategies, a.processWithJSONAnalysis)
 		if a.config.EnableRegex {
 			strategies = append(strategies, a.processWithRegexOnly)
 		}
-		
+
 	default:
+		// For unknown file types, use comprehensive extraction approach
 		if a.config.EnableRegex {
 			strategies = append(strategies, a.processWithRegexOnly)
 		}
+		// Add HTML analysis in case it's a web page without proper extension
+		strategies = append(strategies, a.processWithHTMLAnalysis)
+		// Add JSON analysis in case it's an API response or config
+		strategies = append(strategies, a.processWithJSONAnalysis)
+		// Always have minimal extraction as last resort
 		strategies = append(strategies, a.processWithMinimalExtraction)
 	}
-	
+
 	// Ensure we always have at least one strategy
 	if len(strategies) == 0 {
 		strategies = append(strategies, a.processWithMinimalExtraction)
 	}
-	
+
 	return strategies
 }
 
@@ -228,7 +274,7 @@ func (a *Analyzer) processWithHybridJS(content []byte, sourceURL string) (*Findi
 
 /**
  * @description Fallback strategy: Regex-only processing
- * @param content Content to analyze  
+ * @param content Content to analyze
  * @param sourceURL Source identifier
  * @returns Finding with basic regex extraction
  */
@@ -258,7 +304,7 @@ func (a *Analyzer) processWithHTMLAnalysis(content []byte, sourceURL string) (*F
 }
 
 /**
- * @description Specialized JSON processing strategy  
+ * @description Specialized JSON processing strategy
  * @param content JSON content to analyze
  * @param sourceURL Source identifier
  * @returns Finding with JSON-specific extraction
@@ -332,8 +378,8 @@ func (a *Analyzer) validateAndCleanup(finding *Finding) *Finding {
 	finding.Headers = a.filterValidHeaders(finding.Headers)
 
 	// Ensure minimum data quality
-	if len(finding.Endpoints) == 0 && len(finding.Parameters) == 0 && 
-	   len(finding.Headers) == 0 && len(finding.Domains) == 0 {
+	if len(finding.Endpoints) == 0 && len(finding.Parameters) == 0 &&
+		len(finding.Headers) == 0 && len(finding.Domains) == 0 {
 		return nil
 	}
 
@@ -420,45 +466,93 @@ func (a *Analyzer) filterValidHeaders(headers []Header) []Header {
 
 func (a *Analyzer) detectFileType(sourceURL string, content []byte) FileType {
 	url := strings.ToLower(sourceURL)
-	contentStr := strings.ToLower(string(content[:min(500, len(content))]))
 
+	// For content analysis, use first 1000 characters for better detection
+	contentStr := strings.ToLower(string(content[:min(1000, len(content))]))
+
+	// First check URL-based detection (most reliable)
 	switch {
-	case strings.Contains(url, ".js") || strings.Contains(contentStr, "function") || strings.Contains(contentStr, "var "):
+	case strings.Contains(url, ".js"):
 		return JavaScript
-	case strings.Contains(url, ".ts") || strings.Contains(contentStr, "interface") || strings.Contains(contentStr, "type "):
+	case strings.Contains(url, ".ts") || strings.Contains(url, ".tsx"):
 		return TypeScript
-	case strings.Contains(url, ".html") || strings.Contains(url, ".htm") || strings.Contains(contentStr, "<html"):
+	case strings.Contains(url, ".html") || strings.Contains(url, ".htm"):
 		return HTML
-	case strings.Contains(url, ".json") || (strings.HasPrefix(contentStr, "{") && strings.HasSuffix(contentStr, "}")):
+	case strings.Contains(url, ".json"):
 		return JSON
+	}
+
+	// Enhanced content-based detection for URLs without extensions
+	switch {
+	// JSON detection - more comprehensive patterns
+	case strings.HasPrefix(strings.TrimSpace(contentStr), "{") &&
+		strings.HasSuffix(strings.TrimSpace(contentStr), "}"):
+		return JSON
+	case strings.HasPrefix(strings.TrimSpace(contentStr), "[") &&
+		strings.HasSuffix(strings.TrimSpace(contentStr), "]"):
+		return JSON
+	case strings.Contains(contentStr, `"api"`) || strings.Contains(contentStr, `"endpoint"`) ||
+		strings.Contains(contentStr, `"swagger"`) || strings.Contains(contentStr, `"openapi"`):
+		return JSON
+
+	// HTML detection
+	case strings.Contains(contentStr, "<html") || strings.Contains(contentStr, "<!doctype") ||
+		strings.Contains(contentStr, "<head>") || strings.Contains(contentStr, "<body>"):
+		return HTML
+
+	// TypeScript detection - look for TS-specific patterns
+	case strings.Contains(contentStr, "interface ") || strings.Contains(contentStr, "type ") ||
+		strings.Contains(contentStr, "export interface") || strings.Contains(contentStr, "export type") ||
+		strings.Contains(contentStr, ": string") || strings.Contains(contentStr, ": number") ||
+		strings.Contains(contentStr, "import type"):
+		return TypeScript
+
+	// JavaScript detection - comprehensive patterns
+	case strings.Contains(contentStr, "function ") || strings.Contains(contentStr, "var ") ||
+		strings.Contains(contentStr, "let ") || strings.Contains(contentStr, "const ") ||
+		strings.Contains(contentStr, "=>") || strings.Contains(contentStr, "export ") ||
+		strings.Contains(contentStr, "import ") || strings.Contains(contentStr, "require(") ||
+		strings.Contains(contentStr, "module.exports") || strings.Contains(contentStr, ".prototype") ||
+		strings.Contains(contentStr, "console.log") || strings.Contains(contentStr, "document.") ||
+		strings.Contains(contentStr, "window.") || strings.Contains(contentStr, "fetch(") ||
+		strings.Contains(contentStr, "axios.") || strings.Contains(contentStr, "$."):
+		return JavaScript
+
+	// API-like content detection - likely to contain endpoints
+	case strings.Contains(contentStr, "api/") || strings.Contains(contentStr, "/v1/") ||
+		strings.Contains(contentStr, "/v2/") || strings.Contains(contentStr, "/api") ||
+		strings.Contains(contentStr, "endpoint") || strings.Contains(contentStr, "graphql") ||
+		strings.Contains(contentStr, "rest") || strings.Contains(contentStr, "post ") ||
+		strings.Contains(contentStr, "get ") || strings.Contains(contentStr, "put ") ||
+		strings.Contains(contentStr, "delete "):
+		// Treat API-like content as JavaScript for better extraction
+		return JavaScript
+
 	default:
 		return Unknown
 	}
 }
 
 func (a *Analyzer) generateContentHash(content []byte) string {
-	// Simple hash based on length and first/last bytes
+	// Use SHA256 for proper content hashing
 	if len(content) == 0 {
 		return "empty"
 	}
-	
-	hash := len(content)
-	if len(content) > 0 {
-		hash += int(content[0]) * 256
-	}
-	if len(content) > 1 {
-		hash += int(content[len(content)-1]) * 16
-	}
-	
-	return string(rune(hash))
+
+	hasher := sha256.New()
+	hasher.Write(content)
+	hash := hasher.Sum(nil)
+
+	// Return first 16 characters of hex representation for readability
+	return hex.EncodeToString(hash)[:16]
 }
 
 func (a *Analyzer) isEmpty(finding *Finding) bool {
-	return finding == nil || 
-		(len(finding.Endpoints) == 0 && 
-		 len(finding.Parameters) == 0 && 
-		 len(finding.Headers) == 0 && 
-		 len(finding.Domains) == 0)
+	return finding == nil ||
+		(len(finding.Endpoints) == 0 &&
+			len(finding.Parameters) == 0 &&
+			len(finding.Headers) == 0 &&
+			len(finding.Domains) == 0)
 }
 
 func (a *Analyzer) mergeFindings(findings []RawFinding, sourceURL string) *Finding {

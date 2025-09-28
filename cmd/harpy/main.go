@@ -20,9 +20,9 @@ import (
 var version = "1.0.0" // Harpy version
 
 const (
-	colorCyan   = "\033[36m"
-	colorGreen  = "\033[32m" 
-	colorReset  = "\033[0m"
+	colorCyan  = "\033[36m"
+	colorGreen = "\033[32m"
+	colorReset = "\033[0m"
 )
 
 func main() {
@@ -40,13 +40,13 @@ func main() {
 		banner := `
     ██╗  ██╗ █████╗ ██████╗ ██████╗ ██╗   ██╗
     ██║  ██║██╔══██╗██╔══██╗██╔══██╗╚██╗ ██╔╝
-    ███████║███████║██████╔╝██████╔╝ ╚████╔╝ 
-    ██╔══██║██╔══██║██╔══██╗██╔═══╝   ╚██╔╝  
-    ██║  ██║██║  ██║██║  ██║██║        ██║   
+    ███████║███████║██████╔╝██████╔╝ ╚████╔╝
+    ██╔══██║██╔══██║██╔══██╗██╔═══╝   ╚██╔╝
+    ██║  ██║██║  ██║██║  ██║██║        ██║
     ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝        ╚═╝   `
-		
+
 		author := "github.com/rafabd1"
-		
+
 		if !cfg.NoColor {
 			fmt.Printf("%s%s%s\n", colorCyan, banner, colorReset)
 			fmt.Printf("%s\t\tEndpoint & Parameter Extraction Tool | v%s by %s%s\n\n", colorGreen, version, author, colorReset)
@@ -63,7 +63,7 @@ func main() {
 	}
 	if cfg.ProxyFile != "" {
 		fileProxies, err := networking.LoadProxiesFromFile(cfg.ProxyFile)
-				if err != nil {
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error loading proxy file: %v\n", err)
 			os.Exit(1)
 		}
@@ -80,7 +80,7 @@ func main() {
 			}
 			parsedProxies = append(parsedProxies, pURL)
 		}
-		
+
 		cfg.LoadedProxies = networking.CheckProxies(parsedProxies, cfg.Timeout, cfg.NoColor)
 
 		if len(cfg.LoadedProxies) == 0 {
@@ -93,7 +93,9 @@ func main() {
 	// Add files from directory to targets
 	if cfg.Directory != "" {
 		err := filepath.Walk(cfg.Directory, func(path string, info os.FileInfo, err error) error {
-			if err != nil { return err }
+			if err != nil {
+				return err
+			}
 			// Extended file types for Harpy
 			if !info.IsDir() {
 				ext := strings.ToLower(filepath.Ext(info.Name()))
@@ -110,7 +112,7 @@ func main() {
 		}
 	}
 
-		if len(cfg.Targets) == 0 {
+	if len(cfg.Targets) == 0 {
 		fmt.Fprintln(os.Stderr, "No targets to scan. Provide targets via -u, -f, -d, or stdin.")
 		os.Exit(0)
 	}
@@ -118,11 +120,11 @@ func main() {
 	// Setup components
 	terminalController := output.NewTerminalController()
 	logger := utils.NewLogger(terminalController, cfg.Verbose)
-	
+
 	logger.Infof("Harpy starting...")
-	
+
 	progBar := output.NewProgressBar(terminalController)
-	
+
 	client, err := networking.NewClient(
 		logger,
 		cfg.Timeout,
@@ -206,4 +208,4 @@ func logInitialSettings(logger *utils.Logger, cfg *config.Config) {
 	}
 
 	logger.Infof("Settings: %s", strings.Join(settings, ", "))
-} 
+}
