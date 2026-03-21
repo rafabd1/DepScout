@@ -119,13 +119,3 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## License
 
 This project is licensed under the MIT License.
-
-
-
-<p align="center">
-    <sub>Made with 🖤 by Rafael (github.com/rafabd1)</sub>
-</p>
-
-<!-- <p align="center">
-    <a href="https://ko-fi.com/rafabd1" target="_blank"><img src="https://storage.ko-fi.com/cdn/kofi2.png?v=3" alt="Buy Me A Coffee" style="height: 60px !important;"></a>
-</p> -->
