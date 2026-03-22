@@ -21,7 +21,7 @@
 </div>
 
 <p align="center">
-    <b>A high-performance, concurrent scanner for detecting unclaimed packages.</b>
+    <b>Concurrent scanner for detecting unclaimed packages.</b>
 </p>
 
 ## Features
