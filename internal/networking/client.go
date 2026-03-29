@@ -91,7 +91,7 @@ func (c *Client) Do(reqData RequestData) *ResponseData {
 
 	// Prepare headers
 	// Start with default User-Agent
-	req.Header.Set("User-Agent", "DepScout/1.0")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 
 	// Apply headers from config
 	for _, h := range c.headers {

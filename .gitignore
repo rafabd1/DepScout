@@ -38,3 +38,5 @@ dev/
 *.txt
 *.json
 CHECKLIST.md
+
+mailmap.txt
